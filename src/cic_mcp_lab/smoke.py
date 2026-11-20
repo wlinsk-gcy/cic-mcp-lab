@@ -33,14 +33,22 @@ def _solid_png(size: int = 64) -> bytes:
 
 
 async def _check_chat(settings: Settings) -> None:
+    failed: list[str] = []
     for model_name in sorted({settings.router_model, settings.provider_model}):
         agent = Agent(
             name="smoke",
             system_prompt="你是连通性测试助手，回答尽量简短。",
             model=make_chat_model(settings, model_name),
         )
-        msg = await agent.reply(UserMsg(name="user", content="用一句话介绍你自己。"))
+        try:
+            msg = await agent.reply(UserMsg(name="user", content="用一句话介绍你自己。"))
+        except Exception as exc:
+            failed.append(model_name)
+            print(f"[chat] {model_name} FAILED: {type(exc).__name__}: {exc}")
+            continue
         print(f"[chat] {model_name}: {msg.get_text_content()} (usage: {msg.usage})")
+    if failed:
+        raise RuntimeError(f"chat models failed: {', '.join(failed)}")
 
 
 async def _check_embedding(settings: Settings) -> None:
