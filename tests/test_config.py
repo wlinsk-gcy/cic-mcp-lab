@@ -32,3 +32,10 @@ def test_load_settings_reports_all_missing_keys():
 def test_load_settings_rejects_non_integer_dim():
     with pytest.raises(ConfigError, match="EMBEDDING_DIM"):
         load_settings({**BASE_ENV, "EMBEDDING_DIM": "abc"})
+
+
+def test_settings_repr_hides_secrets():
+    text = repr(load_settings(BASE_ENV))
+    assert "sk-test" not in text
+    assert "'ak'" not in text
+    assert "'sk'" not in text

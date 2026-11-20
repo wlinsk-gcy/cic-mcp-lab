@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Mapping
 
@@ -18,7 +18,7 @@ class ConfigError(RuntimeError):
 @dataclass(frozen=True)
 class Settings:
     dashscope_base_url: str
-    dashscope_api_key: str
+    dashscope_api_key: str = field(repr=False)
     router_model: str
     provider_model: str
     embedding_model: str
@@ -26,8 +26,8 @@ class Settings:
     oss_region: str
     oss_endpoint: str
     oss_bucket: str
-    oss_access_key_id: str
-    oss_access_key_secret: str
+    oss_access_key_id: str = field(repr=False)
+    oss_access_key_secret: str = field(repr=False)
 
 
 _REQUIRED = (
