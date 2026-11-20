@@ -17,5 +17,6 @@ def test_public_url_points_to_bucket_endpoint():
 
 def test_guess_image_type_accepts_images_and_rejects_other_files():
     assert guess_image_type("a.png") == "image/png"
+    assert guess_image_type("product.webp") == "image/webp"
     with pytest.raises(ValueError, match="Not an image"):
         guess_image_type("report.pdf")

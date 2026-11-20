@@ -23,6 +23,11 @@ def test_load_settings_normalizes_oss_region_and_parses_dim():
     assert settings.embedding_dim == 1024
 
 
+def test_load_settings_strips_scheme_from_oss_endpoint():
+    settings = load_settings({**BASE_ENV, "OSS_ENDPOINT": "https://oss-cn-guangzhou.aliyuncs.com"})
+    assert settings.oss_endpoint == "oss-cn-guangzhou.aliyuncs.com"
+
+
 def test_load_settings_reports_all_missing_keys():
     env = {k: v for k, v in BASE_ENV.items() if k not in {"DASHSCOPE_API_KEY", "OSS_BUCKET"}}
     with pytest.raises(ConfigError, match="DASHSCOPE_API_KEY, OSS_BUCKET"):

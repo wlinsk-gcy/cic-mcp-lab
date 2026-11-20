@@ -70,7 +70,8 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         embedding_dim=embedding_dim,
         # OSS SDK V2 expects "cn-guangzhou", the console shows "oss-cn-guangzhou".
         oss_region=get("OSS_REGION").removeprefix("oss-"),
-        oss_endpoint=get("OSS_ENDPOINT"),
+        # Public URLs are built as https://{bucket}.{endpoint}, so drop any scheme.
+        oss_endpoint=get("OSS_ENDPOINT").removeprefix("https://").removeprefix("http://"),
         oss_bucket=get("OSS_BUCKET"),
         oss_access_key_id=get("OSS_ACCESS_KEY_ID"),
         oss_access_key_secret=get("OSS_ACCESS_KEY_SECRET"),

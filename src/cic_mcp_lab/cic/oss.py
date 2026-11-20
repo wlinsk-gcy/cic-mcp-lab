@@ -15,7 +15,7 @@ KEY_PREFIX = "cic-mcp-lab"
 
 
 def guess_image_type(filename: str) -> str:
-    media_type, _ = mimetypes.guess_type(filename)
+    media_type, _ = mimetypes.guess_type(filename, strict=False)
     if not media_type or not media_type.startswith("image/"):
         raise ValueError(f"Not an image file: {filename}")
     return media_type
