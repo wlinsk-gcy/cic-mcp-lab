@@ -1,2 +1,1 @@
-def main() -> None:
-    print("Hello from cic-mcp-lab!")
+"""CIC × MCP third-party agent integration lab."""
