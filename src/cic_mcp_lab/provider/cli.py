@@ -8,7 +8,7 @@ from pathlib import Path
 from ..cic.oss import OssUploader
 from ..config import load_settings
 from ..llm import make_chat_model
-from .agent import ImagesNotSupportedError, ProviderAgentRuntime, make_agent_factory
+from .agent import ImagesNotSupportedError, InvalidImageUrlError, ProviderAgentRuntime, make_agent_factory
 from .catalog import CATALOG
 
 HELP = "命令：/image <本地路径或URL> 附加图片；/new 开启新会话；/exit 退出"
@@ -57,7 +57,7 @@ async def _repl(agent_id: str) -> None:
 
         try:
             result = await runtime.ask(agent_id, line, image_urls=images, conversation_id=conversation_id)
-        except ImagesNotSupportedError as exc:
+        except (ImagesNotSupportedError, InvalidImageUrlError) as exc:
             images = []
             print(f"[error] {exc}；已移除附加的图片，请重新输入")
             continue
