@@ -1,15 +1,17 @@
 """Runtime of the mock third-party agents: per-conversation memory, ask-back, credit."""
 from __future__ import annotations
 
+import asyncio
 import mimetypes
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Literal, Protocol, Sequence
 from urllib.parse import urlparse
 
 from agentscope.agent import Agent
 from agentscope.message import DataBlock, Msg, TextBlock, URLSource, UserMsg
 from agentscope.model import ChatModelBase
+from agentscope.state import AgentState
 from pydantic import BaseModel, Field
 
 from .catalog import AgentSpec
@@ -46,8 +48,39 @@ class ImagesNotSupportedError(ValueError):
 class ReplyingAgent(Protocol):
     async def reply(self, inputs: Msg, structured_schema: type[BaseModel] | None = None) -> Msg: ...
 
+    def checkpoint(self) -> object: ...
+
+    def restore(self, snapshot: object) -> None: ...
+
 
 AgentFactory = Callable[[AgentSpec], ReplyingAgent]
+
+_RESTORABLE_STATE_FIELDS = (
+    "summary",
+    "context",
+    "reply_context",
+    "tool_context",
+    "tasks_context",
+    "middle_context",
+)
+
+
+class RollbackAgent:
+    """agentscope Agent whose memory can be restored to before a failed turn."""
+
+    def __init__(self, agent: Agent) -> None:
+        self._agent = agent
+
+    async def reply(self, inputs: Msg, structured_schema: type[BaseModel] | None = None) -> Msg:
+        return await self._agent.reply(inputs, structured_schema=structured_schema)
+
+    def checkpoint(self) -> AgentState:
+        return self._agent.state.model_copy(deep=True)
+
+    def restore(self, snapshot: AgentState) -> None:
+        # Restore field by field: the agent's permission engine is bound to the live state object.
+        for name in _RESTORABLE_STATE_FIELDS:
+            setattr(self._agent.state, name, getattr(snapshot, name))
 
 
 def image_media_type(url: str) -> str:
@@ -68,6 +101,7 @@ def build_user_msg(message: str, image_urls: Sequence[str]) -> Msg:
 class _Conversation:
     agent_id: str
     agent: ReplyingAgent
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 class ProviderAgentRuntime:
@@ -101,12 +135,19 @@ class ProviderAgentRuntime:
                 raise UnknownConversationError(f"Conversation not found or expired: {conversation_id}")
             is_new = False
 
-        msg = await conversation.agent.reply(
-            build_user_msg(message, image_urls),
-            structured_schema=AgentReply,
-        )
-        parsed = AgentReply.model_validate(msg.structured_output)
-        credit_usage = credit_from_usage(msg.usage)
+        async with conversation.lock:
+            snapshot = conversation.agent.checkpoint()
+            try:
+                msg = await conversation.agent.reply(
+                    build_user_msg(message, image_urls),
+                    structured_schema=AgentReply,
+                )
+                parsed = AgentReply.model_validate(msg.structured_output)
+                credit_usage = credit_from_usage(msg.usage)
+            except BaseException:
+                # A failed turn is not billed and must not stay in memory, so the user can retry.
+                conversation.agent.restore(snapshot)
+                raise
         if is_new:
             # Register only after a successful first turn.
             self._conversations[conversation_id] = conversation
@@ -114,7 +155,7 @@ class ProviderAgentRuntime:
 
 
 def make_agent_factory(model: ChatModelBase) -> AgentFactory:
-    def factory(spec: AgentSpec) -> Agent:
-        return Agent(name=spec.agent_id, system_prompt=spec.system_prompt, model=model)
+    def factory(spec: AgentSpec) -> RollbackAgent:
+        return RollbackAgent(Agent(name=spec.agent_id, system_prompt=spec.system_prompt, model=model))
 
     return factory
