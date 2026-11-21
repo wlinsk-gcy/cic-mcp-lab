@@ -3,15 +3,17 @@ import asyncio
 import pytest
 from agentscope.agent import Agent
 from agentscope.credential import DashScopeCredential
-from agentscope.message import AssistantMsg, DataBlock, TextBlock, Usage, UserMsg
+from agentscope.message import AssistantMsg, DataBlock, Msg, TextBlock, Usage, UserMsg
 from agentscope.model import DashScopeChatModel
 
 from cic_mcp_lab.provider.agent import (
     AgentReply,
     ImagesNotSupportedError,
+    InvalidImageUrlError,
     ProviderAgentRuntime,
     RollbackAgent,
     UnknownConversationError,
+    make_agent_factory,
 )
 from cic_mcp_lab.provider.catalog import AgentSpec
 
@@ -46,6 +48,8 @@ class FakeAgent:
             scripted = self.replies.pop(0)
             if isinstance(scripted, Exception):
                 raise scripted
+            if isinstance(scripted, Msg):
+                return scripted
             status, text, usage = scripted
             return AssistantMsg(
                 name="fake",
@@ -126,8 +130,12 @@ async def test_images_are_rejected_for_text_only_agents():
 
 @pytest.mark.parametrize(
     "failure",
-    [RuntimeError("image download failed"), ("completed", "无用量", None)],
-    ids=["reply-raises", "missing-usage"],
+    [
+        RuntimeError("image download failed"),
+        ("completed", "无用量", None),
+        AssistantMsg(name="fake", content="interrupted", structured_output=None, usage=Usage(input_tokens=1, output_tokens=1)),
+    ],
+    ids=["reply-raises", "missing-usage", "no-structured-output"],
 )
 async def test_failed_follow_up_is_rolled_back_so_the_user_can_retry(failure):
     fake = FakeAgent(
@@ -184,3 +192,27 @@ def test_rollback_agent_restores_memory_in_place():
     assert agent.state is state
     assert state.context == []
     assert state.summary == ""
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["file:///C:/secrets/.env", "http://example.com/x.png", "ftp://example.com/x.png"],
+)
+async def test_non_https_image_urls_are_rejected(url):
+    runtime = make_runtime([], [make_spec("product_copy", supports_image=True)])
+
+    with pytest.raises(InvalidImageUrlError):
+        await runtime.ask("product_copy", "看看这张图", image_urls=[url])
+
+
+class HangingModel(DashScopeChatModel):
+    async def _call_api(self, *args, **kwargs):
+        await asyncio.Event().wait()
+
+
+async def test_timeout_surfaces_as_timeout_not_validation_error():
+    model = HangingModel(credential=DashScopeCredential(api_key="sk-test"), model="m", stream=False)
+    runtime = ProviderAgentRuntime({"trip_planner": make_spec()}, make_agent_factory(model))
+
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(runtime.ask("trip_planner", "帮我规划旅行"), 0.2)

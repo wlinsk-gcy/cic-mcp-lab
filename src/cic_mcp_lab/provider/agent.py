@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Literal, Protocol, Sequence
 from urllib.parse import urlparse
 
-from agentscope.agent import Agent
+from agentscope.agent import Agent, ReActConfig
 from agentscope.message import DataBlock, Msg, TextBlock, URLSource, UserMsg
 from agentscope.model import ChatModelBase
 from agentscope.state import AgentState
@@ -43,6 +43,14 @@ class UnknownConversationError(LookupError):
 
 class ImagesNotSupportedError(ValueError):
     pass
+
+
+class InvalidImageUrlError(ValueError):
+    pass
+
+
+class AgentOutputError(RuntimeError):
+    """The agent finished without a structured reply (e.g. interrupted or out of iterations)."""
 
 
 class ReplyingAgent(Protocol):
@@ -124,6 +132,10 @@ class ProviderAgentRuntime:
             raise UnknownAgentError(f"Unknown agent: {agent_id}")
         if image_urls and not spec.supports_image:
             raise ImagesNotSupportedError(f"Agent {agent_id} does not accept images")
+        insecure = [url for url in image_urls if urlparse(url).scheme != "https"]
+        if insecure:
+            # Non-https URLs (notably file://) would make the model formatter read local files.
+            raise InvalidImageUrlError(f"Image URLs must use https: {', '.join(insecure)}")
 
         if conversation_id is None:
             conversation = _Conversation(agent_id, self._factory(spec))
@@ -142,6 +154,10 @@ class ProviderAgentRuntime:
                     build_user_msg(message, image_urls),
                     structured_schema=AgentReply,
                 )
+                if msg.structured_output is None:
+                    raise AgentOutputError(
+                        f"Agent produced no structured reply (finished_reason={msg.finished_reason})"
+                    )
                 parsed = AgentReply.model_validate(msg.structured_output)
                 credit_usage = credit_from_usage(msg.usage)
             except BaseException:
@@ -156,6 +172,14 @@ class ProviderAgentRuntime:
 
 def make_agent_factory(model: ChatModelBase) -> AgentFactory:
     def factory(spec: AgentSpec) -> RollbackAgent:
-        return RollbackAgent(Agent(name=spec.agent_id, system_prompt=spec.system_prompt, model=model))
+        return RollbackAgent(
+            Agent(
+                name=spec.agent_id,
+                system_prompt=spec.system_prompt,
+                model=model,
+                # Surface cancellation/timeouts as CancelledError instead of an empty reply.
+                react_config=ReActConfig(interruption_raise_cancelled_error=True),
+            )
+        )
 
     return factory
