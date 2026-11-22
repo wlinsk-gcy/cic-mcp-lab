@@ -1,4 +1,4 @@
-"""MCP Server for one mock provider: one entry tool per agent, API-key auth."""
+"""MCP Server for one mock provider: one entry tool per agent, tasks extension, API-key auth."""
 from __future__ import annotations
 
 import asyncio
@@ -15,6 +15,8 @@ from starlette.types import ASGIApp
 from .agent import AgentResult, ImagesNotSupportedError, InvalidImageUrlError, UnknownConversationError
 from .auth import ApiKeyVerifier
 from .catalog import CATALOG, AgentSpec
+from .mcp_tasks import TasksExtension, TasksListenMiddleware
+from .tasks import TaskStore
 
 CREDIT_USAGE_META_KEY = "com.cic/credit_usage"
 CIC_CALLER_ID = "cic"
@@ -88,10 +90,16 @@ def build_app(
     api_key: str,
     runtime: AgentRuntime,
     delay_seconds: float = 0.0,
+    push_enabled: bool = True,
+    ttl_ms: int = 3_600_000,
+    poll_interval_ms: int = 2_000,
 ) -> ASGIApp:
     specs = provider_specs(provider_id)
+    store = TaskStore(ttl_ms=ttl_ms, poll_interval_ms=poll_interval_ms, push_enabled=push_enabled)
     mcp = MCPServer(
         f"cic-lab-{provider_id}",
+        extensions=[TasksExtension(store, task_tools=set(specs))],
+        middleware=[TasksListenMiddleware(store)],
         token_verifier=ApiKeyVerifier({api_key: CIC_CALLER_ID}),
         # API-key auth only: AuthSettings requires an issuer URL, which is never contacted.
         auth=AuthSettings(issuer_url="https://auth.invalid", resource_server_url=None),

@@ -8,7 +8,7 @@ from contextlib import ExitStack, contextmanager
 import pytest
 import uvicorn
 
-from cic_mcp_lab.mcpwire import WireClient
+from cic_mcp_lab.mcpwire import TASKS_EXTENSION, WireClient
 from cic_mcp_lab.provider.agent import AgentResult, UnknownConversationError
 from cic_mcp_lab.provider.server import build_app
 
@@ -122,3 +122,101 @@ def test_caller_errors_are_reported_with_their_message(start_server):
 
     assert result["isError"] is True
     assert "conv_x" in result["content"][0]["text"]
+
+
+def wait_for_terminal(client: WireClient, task_id: str, timeout: float = 5.0) -> dict:
+    deadline = time.monotonic() + timeout
+    while True:
+        task = client.get_task(task_id).result
+        if task["status"] in {"completed", "failed", "cancelled"}:
+            return task
+        assert time.monotonic() < deadline, f"task still {task['status']}"
+        time.sleep(task["pollIntervalMs"] / 1000)
+
+
+def test_discover_advertises_the_tasks_extension(start_server):
+    url, _ = start_server()
+    with WireClient(url, KEY) as client:
+        capabilities = client.request("server/discover").result["capabilities"]
+
+    assert TASKS_EXTENSION in capabilities["extensions"]
+
+
+def test_task_is_returned_immediately_and_its_result_is_pushed(start_server):
+    url, _ = start_server(poll_interval_ms=100)
+    with WireClient(url, KEY) as client:
+        started = time.monotonic()
+        created = client.call_tool("trip_planner", {"message": "sleep=1;hello"}).result
+        assert time.monotonic() - started < 0.5
+        assert (created["resultType"], created["status"]) == ("task", "working")
+        task_id = created["taskId"]
+
+        with client.listen_tasks([task_id, "unknown-task"]) as messages:
+            ack = next(messages)
+            assert ack["method"] == "notifications/subscriptions/acknowledged"
+            assert ack["params"]["notifications"]["taskIds"] == [task_id]
+            pushed = next(
+                message["params"]
+                for message in messages
+                if message.get("method") == "notifications/tasks" and message["params"]["status"] == "completed"
+            )
+        polled = client.get_task(task_id).result
+
+    assert pushed["result"]["_meta"]["com.cic/credit_usage"] == 42
+    assert pushed["result"]["structuredContent"]["reply"] == "echo: hello"
+    assert polled["status"] == "completed"
+    assert polled["result"] == pushed["result"]
+
+
+def test_server_without_push_acknowledges_no_tasks_but_polling_works(start_server):
+    url, _ = start_server(push_enabled=False, poll_interval_ms=100)
+    with WireClient(url, KEY) as client:
+        task_id = client.call_tool("trip_planner", {"message": "hello"}).result["taskId"]
+        with client.listen_tasks([task_id]) as messages:
+            assert next(messages)["params"]["notifications"].get("taskIds", []) == []
+        task = wait_for_terminal(client, task_id)
+
+    assert task["result"]["_meta"]["com.cic/credit_usage"] == 42
+
+
+def test_cancel_stops_the_running_agent(start_server):
+    url, runtime = start_server()
+    with WireClient(url, KEY) as client:
+        task_id = client.call_tool("trip_planner", {"message": "sleep=30;long"}).result["taskId"]
+        assert client.cancel_task(task_id).error is None
+        assert client.get_task(task_id).result["status"] == "cancelled"
+        assert client.cancel_task(task_id).error["code"] == -32602
+
+    assert runtime.cancelled.wait(timeout=5)
+
+
+def test_task_requests_must_name_the_task_in_the_mcp_name_header(start_server):
+    url, _ = start_server()
+    with WireClient(url, KEY) as client:
+        task_id = client.call_tool("trip_planner", {"message": "hello"}).result["taskId"]
+        resp = client.request("tasks/get", {"taskId": task_id})
+
+    assert resp.error["code"] == -32020
+
+
+def test_agent_errors_complete_the_task_with_is_error(start_server):
+    url, _ = start_server(poll_interval_ms=100)
+    with WireClient(url, KEY) as client:
+        task_id = client.call_tool(
+            "trip_planner", {"message": "unknown-conversation", "conversation_id": "conv_x"}
+        ).result["taskId"]
+        task = wait_for_terminal(client, task_id)
+
+    assert task["status"] == "completed"
+    assert task["result"]["isError"] is True
+    assert "conv_x" in task["result"]["content"][0]["text"]
+
+
+def test_tasks_are_forgotten_after_their_ttl(start_server):
+    url, _ = start_server(ttl_ms=300)
+    with WireClient(url, KEY) as client:
+        task_id = client.call_tool("trip_planner", {"message": "hello"}).result["taskId"]
+        time.sleep(0.5)
+        resp = client.get_task(task_id)
+
+    assert resp.error["code"] == -32602
