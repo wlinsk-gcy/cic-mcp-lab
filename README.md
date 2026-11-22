@@ -23,6 +23,7 @@ Copy-Item .env.example .env   # 然后填写百炼与 OSS 配置
 | `uv run cic-recommend "<问题>" [--image] [--include-mock] [--top-k N] [--rerank]` | 按问题推荐 Agent：向量召回 → 按 Agent 聚合 → 回查注册表（下架立即生效）→ top_k，显示匹配度与依据 |
 | `uv run cic-eval [--variants V1,V2,V3] [--output <路径>]` | 推荐效果评测：V1 只用画像（等同于删除示例问题）/ V2 画像 + 示例问题 / V3 + Rerank；输出 Hit@1/2、MRR、阈值扫描、错例，报告写入 `reports/` |
 | `uv run cic-chat [--include-mock]` | 与 CIC Router 对话：每轮意图识别 → 推荐 / 选择候选 / 补充会话 / 直接回答 / 澄清；任务异步提交，结果到达后打印并结算。命令：`/image`、`/threads`、`/usage`、`/new`、`/exit` |
+| `uv run cic-intent-eval` | 意图识别评测：`data/intent_cases.yaml`（34 条，覆盖 5 种意图）→ 准确率、按意图准确率、错例、检索改写，报告写入 `reports/` |
 | `uv run pytest -q` | 运行单元测试 |
 
 ## Agent 上下架（实验）

@@ -1,0 +1,234 @@
+# Intent recognition cases (design §6.3): the 19 acceptance scenarios of §6.7 plus variants.
+# Each case: state (threads / history / pending) + input → expected intent (+ thread_ref / candidate_index when given).
+cases:
+  - name: 1 问候
+    input: 你好
+    expect: {intent: router_answer}
+
+  - name: 2 新需求
+    input: 帮我规划去东京的旅行
+    expect: {intent: recommend}
+
+  - name: 3 选择第一个候选
+    pending: {candidates: [trip_planner, product_copy], message: 帮我规划去东京的旅行}
+    input: 用第一个
+    expect: {intent: select_candidate, candidate_index: 1}
+
+  - name: 4 回答 Agent 的反问
+    threads:
+      - {ref: T1, agent: trip_planner, status: input_required, last_reply: 好的！东京之行没问题。请问计划哪天出发？总预算大概多少？}
+    history:
+      - {role: user, text: 帮我规划去东京的旅行}
+      - {role: agent, thread: T1, text: 好的！东京之行没问题。请问计划哪天出发？总预算大概多少？}
+    input: 12 月 5 号出发，预算 1 万
+    expect: {intent: supplement, thread_ref: T1}
+
+  - name: 5 等待补充时闲聊
+    threads:
+      - {ref: T1, agent: trip_planner, status: input_required, last_reply: 好的！东京之行没问题。请问计划哪天出发？总预算大概多少？}
+    history:
+      - {role: user, text: 帮我规划去东京的旅行}
+      - {role: agent, thread: T1, text: 好的！东京之行没问题。请问计划哪天出发？总预算大概多少？}
+    input: 今天星期几？
+    expect: {intent: router_answer}
+
+  - name: 6 等待补充时开新任务
+    threads:
+      - {ref: T1, agent: trip_planner, status: input_required, last_reply: 好的！东京之行没问题。请问计划哪天出发？总预算大概多少？}
+    history:
+      - {role: user, text: 帮我规划去东京的旅行}
+      - {role: agent, thread: T1, text: 好的！东京之行没问题。请问计划哪天出发？总预算大概多少？}
+    input: 另外帮我写本周周报
+    expect: {intent: recommend}
+
+  - name: 7 两个会话按语义归属
+    threads:
+      - {ref: T1, agent: trip_planner, status: input_required, last_reply: 请问计划哪天出发？总预算大概多少？}
+      - {ref: T2, agent: weekly_report, status: input_required, last_reply: 请列一下你本周完成的主要工作。}
+    history:
+      - {role: agent, thread: T1, text: 请问计划哪天出发？总预算大概多少？}
+      - {role: agent, thread: T2, text: 请列一下你本周完成的主要工作。}
+    input: 预算改成 2 万
+    expect: {intent: supplement, thread_ref: T1}
+
+  - name: 8 两个会话无法判断
+    threads:
+      - {ref: T1, agent: trip_planner, status: input_required, last_reply: 请问计划哪天出发？总预算大概多少？}
+      - {ref: T2, agent: weekly_report, status: input_required, last_reply: 请列一下你本周完成的主要工作。}
+    history:
+      - {role: agent, thread: T1, text: 请问计划哪天出发？总预算大概多少？}
+      - {role: agent, thread: T2, text: 请列一下你本周完成的主要工作。}
+    input: 好的，就这样
+    expect: {intent: clarify}
+
+  - name: 9 修改已完成的结果
+    threads:
+      - {ref: T1, agent: trip_planner, status: completed, last_reply: 【东京 3 日行程】Day 1 浅草寺、晴空塔；Day 2 明治神宫、涩谷；Day 3 上野公园、秋叶原。}
+    history:
+      - {role: agent, thread: T1, text: 【东京 3 日行程】Day 1 浅草寺、晴空塔；Day 2 明治神宫、涩谷；Day 3 上野公园、秋叶原。}
+    input: 第二天的行程换成购物
+    expect: {intent: supplement, thread_ref: T1}
+
+  - name: 10 已完成后同类新任务
+    threads:
+      - {ref: T1, agent: trip_planner, status: completed, last_reply: 【东京 3 日行程】Day 1 浅草寺、晴空塔；Day 2 明治神宫、涩谷；Day 3 上野公园、秋叶原。}
+    history:
+      - {role: agent, thread: T1, text: 【东京 3 日行程】Day 1 浅草寺、晴空塔；Day 2 明治神宫、涩谷；Day 3 上野公园、秋叶原。}
+    input: 再帮我规划一次大阪旅行
+    expect: {intent: recommend}
+
+  - name: 11 带图片的新任务
+    image_count: 1
+    input: 帮这个商品写小红书文案
+    expect: {intent: recommend}
+
+  - name: 12 没有合适 Agent 的新任务
+    input: 帮我订一张明天去上海的机票
+    expect: {intent: recommend}
+
+  - name: 13 待选时转去闲聊
+    pending: {candidates: [trip_planner, product_copy], message: 帮我规划去东京的旅行}
+    input: 算了，讲个笑话吧
+    expect: {intent: router_answer}
+
+  - name: 14 补充另一个 Provider 的会话
+    threads:
+      - {ref: T1, agent: trip_planner, status: completed, last_reply: 【东京 3 日行程】Day 1 浅草寺、晴空塔；Day 2 明治神宫、涩谷；Day 3 上野公园、秋叶原。}
+      - {ref: T2, agent: weekly_report, status: input_required, last_reply: 请列一下你本周完成的主要工作。}
+    history:
+      - {role: agent, thread: T2, text: 请列一下你本周完成的主要工作。}
+    input: 周报补充：这周还完成了接口联调
+    expect: {intent: supplement, thread_ref: T2}
+
+  - name: 15 翻译 Agent 的结果
+    threads:
+      - {ref: T1, agent: trip_planner, status: completed, last_reply: 【东京 3 日行程】Day 1 浅草寺、晴空塔；Day 2 明治神宫、涩谷；Day 3 上野公园、秋叶原。}
+    history:
+      - {role: agent, thread: T1, text: 【东京 3 日行程】Day 1 浅草寺、晴空塔；Day 2 明治神宫、涩谷；Day 3 上野公园、秋叶原。}
+    input: 把上面的行程翻译成英文
+    expect: {intent: router_answer}
+
+  - name: 16 点名候选之外的 Agent
+    pending: {candidates: [trip_planner, product_copy], message: 帮我规划去东京的旅行}
+    input: 我要用周报撰写那个
+    expect: {intent: recommend}
+
+  - name: 17 处理中时补充
+    threads:
+      - {ref: T1, agent: trip_planner, status: running, last_reply: 好的！东京之行没问题。请问计划哪天出发？总预算大概多少？}
+    history:
+      - {role: agent, thread: T1, text: 好的！东京之行没问题。请问计划哪天出发？总预算大概多少？}
+      - {role: user, text: 12 月 5 号出发，预算 1 万}
+    input: 预算改成 2 万
+    expect: {intent: supplement, thread_ref: T1}
+
+  - name: 18 处理中时闲聊
+    threads:
+      - {ref: T1, agent: trip_planner, status: running, last_reply: 好的！东京之行没问题。请问计划哪天出发？总预算大概多少？}
+    history:
+      - {role: user, text: 12 月 5 号出发，预算 1 万}
+    input: 今天星期几？
+    expect: {intent: router_answer}
+
+  - name: 19 选择周报候选
+    pending: {candidates: [weekly_report, meeting_minutes], message: 帮我写本周周报}
+    input: 第一个
+    expect: {intent: select_candidate, candidate_index: 1}
+
+  - name: 20 按名称选择
+    pending: {candidates: [trip_planner, hotel_booking], message: 下周去大阪玩几天}
+    input: 旅行规划那个
+    expect: {intent: select_candidate, candidate_index: 1}
+
+  - name: 21 按序数选择第二个
+    pending: {candidates: [trip_planner, hotel_booking], message: 下周去大阪玩几天}
+    input: 第二个吧
+    expect: {intent: select_candidate, candidate_index: 2}
+
+  - name: 22 失败后重试
+    threads:
+      - {ref: T1, agent: weekly_report, status: failed}
+    pending: {retry: T1, message: 帮我写周报：本周完成了接口联调}
+    input: 重试一下
+    expect: {intent: select_candidate, candidate_index: 1}
+
+  - name: 23 失败后换 Agent
+    threads:
+      - {ref: T1, agent: weekly_report, status: failed}
+    pending: {retry: T1, message: 帮我写周报：本周完成了接口联调}
+    input: 换一个别的 Agent 吧
+    expect: {intent: select_candidate, candidate_index: 2}
+
+  - name: 24 失败后转去别的话题
+    threads:
+      - {ref: T1, agent: weekly_report, status: failed}
+    pending: {retry: T1, message: 帮我写周报：本周完成了接口联调}
+    input: 先不用了，今天天气怎么样
+    expect: {intent: router_answer}
+
+  - name: 25 总结 Agent 的结果
+    threads:
+      - {ref: T1, agent: trip_planner, status: completed, last_reply: 【东京 3 日行程】Day 1 浅草寺、晴空塔；Day 2 明治神宫、涩谷；Day 3 上野公园、秋叶原。}
+    history:
+      - {role: agent, thread: T1, text: 【东京 3 日行程】Day 1 浅草寺、晴空塔；Day 2 明治神宫、涩谷；Day 3 上野公园、秋叶原。}
+    input: 帮我总结一下这份行程的重点
+    expect: {intent: router_answer}
+
+  - name: 26 关于平台的问题
+    input: CIC 平台都能做什么？
+    expect: {intent: router_answer}
+
+  - name: 27 写邮件的新任务
+    input: 帮我写一封邮件给客户，说明发货要延迟三天
+    expect: {intent: recommend}
+
+  - name: 28 回答文案 Agent 的反问
+    threads:
+      - {ref: T1, agent: product_copy, status: input_required, last_reply: 请问文案投放在哪个平台？希望什么风格？}
+    history:
+      - {role: agent, thread: T1, text: 请问文案投放在哪个平台？希望什么风格？}
+    input: 小红书，活泼一点
+    expect: {intent: supplement, thread_ref: T1}
+
+  - name: 29 两个会话按内容归属
+    threads:
+      - {ref: T1, agent: trip_planner, status: input_required, last_reply: 请问计划哪天出发？总预算大概多少？}
+      - {ref: T2, agent: product_copy, status: input_required, last_reply: 请问文案投放在哪个平台？希望什么风格？}
+    history:
+      - {role: agent, thread: T1, text: 请问计划哪天出发？总预算大概多少？}
+      - {role: agent, thread: T2, text: 请问文案投放在哪个平台？希望什么风格？}
+    input: 抖音，风格要搞笑
+    expect: {intent: supplement, thread_ref: T2}
+
+  - name: 30 依赖上文的新任务
+    history:
+      - {role: user, text: 这周我主要做了接口联调和需求评审}
+      - {role: router, text: 听起来这周挺充实的！}
+    input: 帮我写成周报
+    expect: {intent: recommend}
+
+  - name: 31 致谢
+    threads:
+      - {ref: T1, agent: trip_planner, status: completed, last_reply: 【东京 3 日行程】Day 1 浅草寺、晴空塔；Day 2 明治神宫、涩谷；Day 3 上野公园、秋叶原。}
+    history:
+      - {role: agent, thread: T1, text: 【东京 3 日行程】Day 1 浅草寺、晴空塔；Day 2 明治神宫、涩谷；Day 3 上野公园、秋叶原。}
+    input: 谢谢，很有帮助
+    expect: {intent: router_answer}
+
+  - name: 32 润色一段话
+    input: 帮我把这句话润色一下：我们的产品非常好用，欢迎购买
+    expect: {intent: router_answer}
+
+  - name: 33 需求不清晰
+    input: 帮我弄一下那个
+    expect: {intent: clarify}
+
+  - name: 34 两个已完成会话都可能被修改
+    threads:
+      - {ref: T1, agent: trip_planner, status: completed, last_reply: 【东京 3 日行程】Day 1 浅草寺、晴空塔；Day 2 明治神宫、涩谷；Day 3 上野公园、秋叶原。}
+      - {ref: T2, agent: product_copy, status: completed, last_reply: 【小红书文案】沙漠色高帮工装靴，防滑厚底，城市户外两相宜！}
+    history:
+      - {role: agent, thread: T1, text: 【东京 3 日行程】Day 1 浅草寺、晴空塔；Day 2 明治神宫、涩谷；Day 3 上野公园、秋叶原。}
+      - {role: agent, thread: T2, text: 【小红书文案】沙漠色高帮工装靴，防滑厚底，城市户外两相宜！}
+    input: 再改得简洁一点
+    expect: {intent: clarify}
