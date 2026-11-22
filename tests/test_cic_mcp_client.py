@@ -1,5 +1,6 @@
 import anyio
 import pytest
+from mcp.shared.exceptions import MCPError
 
 from cic_mcp_lab.cic.contract import parse_agent_reply, validate_entry_tool
 from cic_mcp_lab.cic.mcp_client import CreateTaskResult, ProviderClient, ProviderUnavailable
@@ -56,6 +57,18 @@ async def test_provider_without_push_accepts_no_subscription(start_server):
         handle = await client.submit("trip_planner", {"message": "sleep=1;hi"})
         async with client.listen([handle.task_id]) as subscription:
             assert subscription.accepted == frozenset()
+
+
+async def test_errors_inside_client_and_listen_blocks_propagate_unwrapped(start_server):
+    url, _ = start_server()
+    with pytest.raises(MCPError):
+        async with ProviderClient(url, KEY) as client:
+            handle = await client.submit("trip_planner", {"message": "sleep=1;hi"})
+            async with client.listen([handle.task_id]):
+                await client.get_task("no-such-task")
+    with pytest.raises(ValueError, match="body"):
+        async with ProviderClient(url, KEY):
+            raise ValueError("body")
 
 
 async def test_provider_without_tasks_answers_directly(start_server):

@@ -183,6 +183,7 @@ class TasksClientExtension(ClientExtension):
                 send.close()  # ends the caller's `async for` over events
 
         accepted: frozenset[str] | None = None
+        body_error: Exception | None = None
         try:
             async with anyio.create_task_group() as tg:
                 async with self._ack_lock:
@@ -195,7 +196,10 @@ class TasksClientExtension(ClientExtension):
                         self._pending_ack = None
                 accepted = holder.get("accepted")
                 if accepted is not None:
-                    yield TaskSubscription(accepted, recv)
+                    try:
+                        yield TaskSubscription(accepted, recv)
+                    except Exception as exc:  # re-raised after the task group so callers see it unwrapped
+                        body_error = exc
                 tg.cancel_scope.cancel()
         finally:
             for task_id in ids:
@@ -206,6 +210,8 @@ class TasksClientExtension(ClientExtension):
                         del self._listeners[task_id]
             send.close()
             recv.close()
+        if body_error is not None:
+            raise body_error
         if accepted is None:
             error = holder.get("error")
             raise ListenFailed(describe_error(error) if error else f"No acknowledgement within {ack_timeout}s")
@@ -243,16 +249,20 @@ class ProviderClient:
                     message_handler=self._extension.on_message,
                 )
             )
-        except Exception as exc:
-            await stack.aclose()
-            raise ProviderUnavailable(f"{self.url}: {describe_error(exc)}") from exc
+        except BaseException as exc:
+            with anyio.CancelScope(shield=True):
+                await stack.aclose()
+            if isinstance(exc, Exception):
+                raise ProviderUnavailable(f"{self.url}: {describe_error(exc)}") from exc
+            raise
         self._stack = stack
         return self
 
     async def __aexit__(self, *exc_info: object) -> None:
         stack, self._stack, self._client = self._stack, None, None
         if stack is not None:
-            await stack.__aexit__(*exc_info)
+            # Not forwarding exc_info: the SDK's task groups would wrap the caller's exception in groups.
+            await stack.aclose()
 
     @property
     def _connected(self) -> Client:
