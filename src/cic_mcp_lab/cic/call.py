@@ -46,7 +46,7 @@ async def _call(args: argparse.Namespace) -> bool:
     ledger = Ledger()
     backstop = float(os.environ.get("TASK_BACKSTOP_POLL_SECONDS", "30"))
     started = time.monotonic()
-    async with TaskWatcher(registry, ledger, backstop_poll_seconds=backstop) as watcher:
+    async with TaskWatcher(load_registry, ledger, backstop_poll_seconds=backstop) as watcher:
         try:
             submission = await watcher.submit(args.agent, args.message, image_urls, args.conversation_id)
         except SubmitFailed as exc:

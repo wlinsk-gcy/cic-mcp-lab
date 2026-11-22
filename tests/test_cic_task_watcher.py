@@ -26,6 +26,11 @@ def record_for(url, agent_id="trip_planner"):
     return AgentRecord(agent_id, "provider-a", "n", "d", url, "TEST_KEY", agent_id, 0.0001)
 
 
+def registry_of(*records):
+    """A registry loader, the way the watcher reads load_registry()."""
+    return lambda: {record.agent_id: record for record in records}
+
+
 async def next_outcome(watcher, timeout=10):
     with anyio.fail_after(timeout):
         return await watcher.outcomes.get()
@@ -34,7 +39,7 @@ async def next_outcome(watcher, timeout=10):
 async def test_pushed_reply_is_settled_once_per_task(start_server):
     url, _ = start_server()
     ledger = Ledger()
-    async with TaskWatcher({"trip_planner": record_for(url)}, ledger, env=ENV) as watcher:
+    async with TaskWatcher(registry_of(record_for(url)), ledger, env=ENV) as watcher:
         submission = await watcher.submit("trip_planner", "sleep=0.5;hi")
         outcome = await next_outcome(watcher)
 
@@ -46,7 +51,7 @@ async def test_pushed_reply_is_settled_once_per_task(start_server):
 
 async def test_provider_without_push_is_polled(start_server):
     url, _ = start_server(push_enabled=False, poll_interval_ms=100)
-    async with TaskWatcher({"trip_planner": record_for(url)}, Ledger(), env=ENV) as watcher:
+    async with TaskWatcher(registry_of(record_for(url)), Ledger(), env=ENV) as watcher:
         await watcher.submit("trip_planner", "hi")
         outcome = await next_outcome(watcher)
 
@@ -56,7 +61,7 @@ async def test_provider_without_push_is_polled(start_server):
 
 async def test_short_task_ttl_is_flagged_on_submission(start_server):
     url, _ = start_server(ttl_ms=60_000)
-    async with TaskWatcher({"trip_planner": record_for(url)}, Ledger(), env=ENV) as watcher:
+    async with TaskWatcher(registry_of(record_for(url)), Ledger(), env=ENV) as watcher:
         submission = await watcher.submit("trip_planner", "hi")
 
     assert any("ttlMs" in warning for warning in submission.warnings)
@@ -65,7 +70,7 @@ async def test_short_task_ttl_is_flagged_on_submission(start_server):
 async def test_provider_without_tasks_answers_directly(start_server):
     url, _ = start_server(tasks_enabled=False)
     ledger = Ledger()
-    async with TaskWatcher({"trip_planner": record_for(url)}, ledger, env=ENV) as watcher:
+    async with TaskWatcher(registry_of(record_for(url)), ledger, env=ENV) as watcher:
         submission = await watcher.submit("trip_planner", "hi")
         outcome = await next_outcome(watcher)
 
@@ -78,7 +83,7 @@ async def test_provider_without_tasks_answers_directly(start_server):
 async def test_failed_turns_are_not_billed(start_server, message, failure):
     url, _ = start_server()
     ledger = Ledger()
-    async with TaskWatcher({"trip_planner": record_for(url)}, ledger, env=ENV) as watcher:
+    async with TaskWatcher(registry_of(record_for(url)), ledger, env=ENV) as watcher:
         await watcher.submit("trip_planner", message, conversation_id="conv_1")
         outcome = await next_outcome(watcher)
 
@@ -88,7 +93,7 @@ async def test_failed_turns_are_not_billed(start_server, message, failure):
 
 async def test_turns_of_one_conversation_never_overlap(start_server):
     url, _ = start_server()
-    async with TaskWatcher({"trip_planner": record_for(url)}, Ledger(), env=ENV) as watcher:
+    async with TaskWatcher(registry_of(record_for(url)), Ledger(), env=ENV) as watcher:
         await watcher.submit("trip_planner", "sleep=0.5;first", conversation_id="conv_1")
         with pytest.raises(ConversationBusy):
             await watcher.submit("trip_planner", "second", conversation_id="conv_1")
@@ -101,7 +106,7 @@ async def test_turns_of_one_conversation_never_overlap(start_server):
 
 async def test_a_finished_watch_never_frees_the_next_turns_busy_mark(start_server):
     url, _ = start_server()
-    async with TaskWatcher({"trip_planner": record_for(url)}, Ledger(), env=ENV) as watcher:
+    async with TaskWatcher(registry_of(record_for(url)), Ledger(), env=ENV) as watcher:
         await watcher.submit("trip_planner", "first", conversation_id="conv_1")
         await next_outcome(watcher)
         await watcher.submit("trip_planner", "sleep=2;second", conversation_id="conv_1")
@@ -112,10 +117,10 @@ async def test_a_finished_watch_never_frees_the_next_turns_busy_mark(start_serve
 
 async def test_submissions_that_never_reach_the_agent_fail(start_server):
     url, _ = start_server()
-    registry = {
-        "trip_planner": record_for(url),
-        "offline": record_for(f"http://127.0.0.1:{unused_port()}/mcp", agent_id="offline"),
-    }
+    registry = registry_of(
+        record_for(url),
+        record_for(f"http://127.0.0.1:{unused_port()}/mcp", agent_id="offline"),
+    )
     async with TaskWatcher(registry, Ledger(), env={"TEST_KEY": "sk-wrong"}) as watcher:
         for agent_id in ("nope", "trip_planner", "offline"):
             with pytest.raises(SubmitFailed):
@@ -127,11 +132,15 @@ async def test_submissions_that_never_reach_the_agent_fail(start_server):
 
 async def test_delisting_blocks_new_turns_but_running_tasks_still_settle(start_server):
     url, _ = start_server()
-    registry = {"trip_planner": record_for(url)}
+    listing = {"status": "published"}
+
+    def registry():  # a fresh mapping on every call, like load_registry()
+        return {"trip_planner": replace(record_for(url), status=listing["status"])}
+
     ledger = Ledger()
     async with TaskWatcher(registry, ledger, env=ENV) as watcher:
         submission = await watcher.submit("trip_planner", "sleep=0.5;hi")
-        registry["trip_planner"] = replace(registry["trip_planner"], status="delisted")
+        listing["status"] = "delisted"
         with pytest.raises(SubmitFailed, match="delisted"):
             await watcher.submit("trip_planner", "again")
         outcome = await next_outcome(watcher)
@@ -142,7 +151,7 @@ async def test_delisting_blocks_new_turns_but_running_tasks_still_settle(start_s
 
 async def test_mock_agents_cannot_be_called():
     mock = AgentRecord("hotel_booking", "provider-mock", "n", "d", None, None, None, 0.0001)
-    async with TaskWatcher({"hotel_booking": mock}, Ledger(), env=ENV) as watcher:
+    async with TaskWatcher(registry_of(mock), Ledger(), env=ENV) as watcher:
         with pytest.raises(SubmitFailed, match="mock agent"):
             await watcher.submit("hotel_booking", "hi")
 
@@ -183,7 +192,7 @@ class ScriptedClient:
 
 def scripted_watcher(client, ledger=None):
     return TaskWatcher(
-        {"trip_planner": record_for("http://scripted/mcp")},
+        registry_of(record_for("http://scripted/mcp")),
         ledger or Ledger(),
         env=ENV,
         client_factory=lambda url, key: client,
@@ -265,7 +274,7 @@ class Unreachable:
 async def test_watch_reconnects_and_polls_after_the_connection_breaks(reconnects, failure):
     clients = iter([DroppedPushClient(["working"]), *(ScriptedClient([status]) for status in reconnects)])
     watcher = TaskWatcher(
-        {"trip_planner": record_for("http://scripted/mcp")},
+        registry_of(record_for("http://scripted/mcp")),
         Ledger(),
         env=ENV,
         client_factory=lambda url, key: next(clients, Unreachable()),
@@ -300,7 +309,7 @@ class DroppingClient(ScriptedClient):
 async def test_reconnect_failures_are_counted_consecutively():
     clients = iter([DroppedPushClient(["working"]), DroppingClient(), DroppingClient(), ScriptedClient(["completed"])])
     watcher = TaskWatcher(
-        {"trip_planner": record_for("http://scripted/mcp")},
+        registry_of(record_for("http://scripted/mcp")),
         Ledger(),
         env=ENV,
         client_factory=lambda url, key: next(clients, Unreachable()),

@@ -114,14 +114,14 @@ class TaskWatcher:
 
     def __init__(
         self,
-        registry: Mapping[str, AgentRecord],
+        registry: Callable[[], Mapping[str, AgentRecord]],
         ledger: Ledger,
         *,
         client_factory: Callable[[str, str], Any] = ProviderClient,
         env: Mapping[str, str] = os.environ,
         backstop_poll_seconds: float = 30.0,
     ) -> None:
-        self._registry = registry
+        self._registry = registry  # read on every submit so delisting takes effect at once (design §13.10)
         self._ledger = ledger
         self._client_factory = client_factory
         self._env = env
@@ -155,7 +155,7 @@ class TaskWatcher:
         The registry is consulted on every call, so delisting takes effect at once; turns already
         accepted keep the record they were submitted with (design §13.10).
         """
-        record = self._registry.get(agent_id)
+        record = self._registry().get(agent_id)
         if record is None:
             raise SubmitFailed(f"Unknown agent {agent_id!r}")
         if not record.callable:
