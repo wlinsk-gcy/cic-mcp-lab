@@ -32,7 +32,7 @@ class Settings:
     oss_access_key_id: str = field(repr=False)
     oss_access_key_secret: str = field(repr=False)
     qdrant_path: Path = PROJECT_ROOT / "data" / "qdrant"
-    recall_top_n: int = 20
+    recall_top_n: int = 20  # agents (not points) recalled per query
     recommend_top_k: int = 2
     recommend_min_score_dense: float | None = None  # chosen by the step 5 evaluation; unset = no threshold
 

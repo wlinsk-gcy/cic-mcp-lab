@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from ..registry import AgentRecord
 from .embedding import Embedder
-from .vector_store import Kind, QdrantVectorStore, SearchHit
+from .vector_store import Kind, QdrantVectorStore
 
 
 @dataclass(frozen=True)
@@ -27,7 +27,7 @@ class Recommender:
         store: QdrantVectorStore,
         registry: Callable[[], Mapping[str, AgentRecord]],
         *,
-        recall_top_n: int = 20,
+        recall_top_n: int = 20,  # how many agents (not points) to recall before the registry check and threshold
         top_k: int = 2,
         min_score: float | None = None,
     ) -> None:
@@ -42,26 +42,22 @@ class Recommender:
         self, query: str, *, with_image: bool = False, include_mock: bool = False
     ) -> list[Recommendation]:
         [vector] = await self._embedder.embed([query])
-        hits = self._store.search(
+        # One hit per agent (its best match), best agents first.
+        hits = self._store.search_agents(
             vector, self._recall_top_n, callable_only=not include_mock, require_image=with_image
         )
-        best: dict[str, SearchHit] = {}
-        for hit in hits:
-            if hit.agent_id not in best or hit.score > best[hit.agent_id].score:
-                best[hit.agent_id] = hit
 
         registry = self._registry()  # the index can lag behind the registry, so confirm every candidate
         picks: list[Recommendation] = []
-        for agent_id, hit in best.items():
-            record = registry.get(agent_id)
+        for hit in hits:
+            record = registry.get(hit.agent_id)
             if record is None or not record.published or (not include_mock and not record.callable):
                 continue
             if self._min_score is not None and hit.score < self._min_score:
                 continue
             picks.append(
                 Recommendation(
-                    agent_id, record.display_name, record.provider_id, record.callable, hit.score, hit.kind, hit.text
+                    hit.agent_id, record.display_name, record.provider_id, record.callable, hit.score, hit.kind, hit.text
                 )
             )
-        picks.sort(key=lambda pick: pick.score, reverse=True)
         return picks[: self._top_k]

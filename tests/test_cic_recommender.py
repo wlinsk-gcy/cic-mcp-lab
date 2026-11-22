@@ -78,6 +78,12 @@ async def test_threshold_and_top_k(store):
     assert ids(recs) == ["trip"]
 
 
+async def test_recall_counts_agents_not_points(store):
+    recs = await recommender(store, [1, 0, 0], recall_top_n=2, top_k=2).recommend("q")
+
+    assert ids(recs) == ["trip", "copy"]  # trip's two points must not crowd copy out
+
+
 async def test_registry_is_rechecked_because_the_index_can_lag(store):
     delisted = {**REGISTRY, "trip": record("trip", status="delisted")}
     del delisted["report"]

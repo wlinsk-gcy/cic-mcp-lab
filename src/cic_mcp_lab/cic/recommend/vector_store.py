@@ -18,6 +18,7 @@ from qdrant_client.models import (
     FilterSelector,
     MatchValue,
     PointStruct,
+    ScoredPoint,
     VectorParams,
 )
 
@@ -51,6 +52,20 @@ def _match(key: str, value: object) -> FieldCondition:
 
 def _agent(agent_id: str) -> Filter:
     return Filter(must=[_match("agent_id", agent_id)])
+
+
+def _searchable(callable_only: bool, require_image: bool) -> Filter:
+    must = [_match("status", "published")]
+    if callable_only:
+        must.append(_match("callable", True))
+    if require_image:
+        must.append(_match("supports_image", True))
+    return Filter(must=must)
+
+
+def _hit(point: ScoredPoint) -> SearchHit:
+    payload = point.payload or {}
+    return SearchHit(payload["agent_id"], payload["kind"], payload["text"], point.score)
 
 
 class QdrantVectorStore:
@@ -135,16 +150,32 @@ class QdrantVectorStore:
         callable_only: bool = True,
         require_image: bool = False,
     ) -> list[SearchHit]:
-        must = [_match("status", "published")]
-        if callable_only:
-            must.append(_match("callable", True))
-        if require_image:
-            must.append(_match("supports_image", True))
+        """The best `top_n` points; one agent may fill several of them."""
         result = self._client.query_points(
-            COLLECTION, query=list(vector), query_filter=Filter(must=must), limit=top_n, with_payload=True
+            COLLECTION,
+            query=list(vector),
+            query_filter=_searchable(callable_only, require_image),
+            limit=top_n,
+            with_payload=True,
         )
-        return [
-            SearchHit(point.payload["agent_id"], point.payload["kind"], point.payload["text"], point.score)
-            for point in result.points
-            if point.payload
-        ]
+        return [_hit(point) for point in result.points if point.payload]
+
+    def search_agents(
+        self,
+        vector: Sequence[float],
+        top_agents: int,
+        *,
+        callable_only: bool = True,
+        require_image: bool = False,
+    ) -> list[SearchHit]:
+        """Each agent's single best point, best agents first, for up to `top_agents` agents."""
+        result = self._client.query_points_groups(
+            COLLECTION,
+            query=list(vector),
+            group_by="agent_id",
+            group_size=1,
+            limit=top_agents,
+            query_filter=_searchable(callable_only, require_image),
+            with_payload=True,
+        )
+        return [_hit(group.hits[0]) for group in result.groups if group.hits and group.hits[0].payload]
