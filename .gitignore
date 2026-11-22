@@ -23,6 +23,7 @@ htmlcov/
 # Local runtime data
 data/qdrant/
 *.log
+reports/
 
 # Design docs and implementation plans stay local
 docs/
