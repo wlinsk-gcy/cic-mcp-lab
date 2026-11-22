@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -70,13 +71,28 @@ class WireClient:
         return self.request("tasks/cancel", {"taskId": task_id}, name=task_id)
 
     @contextmanager
-    def listen_tasks(self, task_ids: list[str]) -> Iterator[Iterator[dict[str, Any]]]:
-        """Open a `subscriptions/listen` stream for task ids; yields an iterator of JSON-RPC messages."""
+    def listen_tasks(
+        self, task_ids: list[str], *, timeout: float | None = None
+    ) -> Iterator[Iterator[dict[str, Any]]]:
+        """Open a `subscriptions/listen` stream for task ids; yields an iterator of JSON-RPC messages.
+
+        `timeout` closes the stream after that many seconds (reading then raises), so callers cannot
+        block forever on a missing notification.
+        """
         method = "subscriptions/listen"
         payload = self._payload(method, {"notifications": {"taskIds": task_ids}}, True)
         with self._http.stream("POST", self._url, json=payload, headers=self._headers(method, None)) as resp:
-            resp.raise_for_status()
-            yield (json.loads(line[5:]) for line in resp.iter_lines() if line.startswith("data:"))
+            timer = None
+            if timeout is not None:
+                timer = threading.Timer(timeout, resp.close)
+                timer.daemon = True
+                timer.start()
+            try:
+                resp.raise_for_status()
+                yield (json.loads(line[5:]) for line in resp.iter_lines() if line.startswith("data:"))
+            finally:
+                if timer is not None:
+                    timer.cancel()
 
     def _headers(self, method: str, name: str | None) -> dict[str, str]:
         headers = {

@@ -5,6 +5,7 @@ import time
 from collections.abc import Sequence
 from contextlib import ExitStack, contextmanager
 
+import httpx
 import pytest
 import uvicorn
 
@@ -151,18 +152,16 @@ def test_task_is_returned_immediately_and_its_result_is_pushed(start_server):
         assert (created["resultType"], created["status"]) == ("task", "working")
         task_id = created["taskId"]
 
-        with client.listen_tasks([task_id, "unknown-task"]) as messages:
+        with client.listen_tasks([task_id, "unknown-task"], timeout=10) as messages:
             ack = next(messages)
             assert ack["method"] == "notifications/subscriptions/acknowledged"
             assert ack["params"]["notifications"]["taskIds"] == [task_id]
-            deadline = time.monotonic() + 10
             pushed = None
             for message in messages:
                 if message.get("method") == "notifications/tasks" and message["params"]["status"] == "completed":
                     pushed = message["params"]
                     break
-                assert time.monotonic() < deadline, "no completed push within 10 s"
-            assert pushed is not None
+            assert pushed is not None, "stream ended without a completed push"
         polled = client.get_task(task_id).result
 
     assert pushed["result"]["_meta"]["com.cic/credit_usage"] == 42
@@ -175,7 +174,7 @@ def test_server_without_push_acknowledges_no_tasks_but_polling_works(start_serve
     url, _ = start_server(push_enabled=False, poll_interval_ms=100)
     with WireClient(url, KEY) as client:
         task_id = client.call_tool("trip_planner", {"message": "hello"}).result["taskId"]
-        with client.listen_tasks([task_id]) as messages:
+        with client.listen_tasks([task_id], timeout=10) as messages:
             assert next(messages)["params"]["notifications"].get("taskIds", []) == []
         task = wait_for_terminal(client, task_id)
 
@@ -224,11 +223,24 @@ def test_listen_delivers_every_already_finished_task(start_server):
         task_ids = [client.call_tool("trip_planner", {"message": f"m{i}"}).result["taskId"] for i in range(300)]
         for task_id in task_ids:
             wait_for_terminal(client, task_id)
-        with client.listen_tasks(task_ids) as messages:
+        with client.listen_tasks(task_ids, timeout=20) as messages:
             assert len(next(messages)["params"]["notifications"]["taskIds"]) == 300
             pushed = {next(messages)["params"]["taskId"] for _ in range(300)}
 
     assert pushed == set(task_ids)
+
+
+def test_listen_timeout_stops_a_stream_that_never_delivers(start_server):
+    url, _ = start_server()
+    with WireClient(url, KEY) as client:
+        task_id = client.call_tool("trip_planner", {"message": "sleep=30;long"}).result["taskId"]
+        started = time.monotonic()
+        with pytest.raises((httpx.ReadError, httpx.StreamClosed)):
+            with client.listen_tasks([task_id], timeout=1) as messages:
+                next(messages)  # ack
+                next(messages)  # no push for 30 s: the timeout must end the read
+        assert time.monotonic() - started < 5
+        client.cancel_task(task_id)
 
 
 def test_agent_errors_complete_the_task_with_is_error(start_server):
