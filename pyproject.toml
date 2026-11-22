@@ -12,6 +12,7 @@ dependencies = [
     "alibabacloud-oss-v2>=1.4.1",
     "mcp>=2.3",
     "openai>=3.57.0",
+    "prompt-toolkit>=3.0.53",
     "python-dotenv>=1.2.4",
     "pyyaml>=6.0.3",
     "qdrant-client>=1.20.0",
@@ -27,6 +28,7 @@ cic-call = "cic_mcp_lab.cic.call:main"
 cic-onboard = "cic_mcp_lab.cic.onboard:main"
 cic-recommend = "cic_mcp_lab.cic.recommend.cli:main"
 cic-eval = "cic_mcp_lab.cic.eval:main"
+cic-chat = "cic_mcp_lab.cic.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.11.14,<0.12.0"]
