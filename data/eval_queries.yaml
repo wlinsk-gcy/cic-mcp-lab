@@ -1,0 +1,67 @@
+# Recommendation test set (design §7). Never copy an agent's registered example question here (data leakage).
+# expect: the agent that should come first; null = no onboarded agent fits (category none).
+# image: true = the user attached an image, so only image-capable agents qualify.
+# history: earlier turns; V1-V3 search with the last message only, V4 (step 6) will rewrite with the history.
+queries:
+  # ---- regular: clear requests ----
+  - {query: 五一想带孩子去西安玩三天，帮我做个攻略, expect: trip_planner, category: regular}
+  - {query: 去新加坡出差顺便玩两天，帮我排一下每天去哪, expect: trip_planner, category: regular}
+  - {query: 帮我给这款蓝牙耳机写一段电商详情页介绍, expect: product_copy, category: regular}
+  - {query: 新款防晒霜要上架了，帮忙写几句吸引人的商品描述, expect: product_copy, category: regular}
+  - {query: 这周主要在做数据迁移和性能优化，帮我整理成周报, expect: weekly_report, category: regular}
+  - {query: 帮我把这周写的代码和修的 bug 汇总成工作周报, expect: weekly_report, category: regular}
+  - {query: 杭州西湖边有没有安静一点的酒店推荐, expect: hotel_booking, category: regular}
+  - {query: 去泰国旅游要不要提前办签证, expect: visa_consult, category: regular}
+  - {query: 第一次办日本签证，流程是怎样的, expect: visa_consult, category: regular}
+  - {query: 下周五深圳飞成都，哪个航班便宜, expect: flight_deals, category: regular}
+  - {query: 帮我把需求评审会的讨论整理成纪要，列出待办, expect: meeting_minutes, category: regular}
+  - {query: 给合作方写一封邮件，说明项目要延期一周, expect: email_writer, category: regular}
+  - {query: 用英文给海外客户写一封新品推广邮件, expect: email_writer, category: regular}
+  - {query: 季度业务复盘要做演示文稿，先帮我列个提纲, expect: ppt_outline, category: regular}
+  - {query: 帮店铺的周年庆活动设计一张宣传海报, expect: poster_design, category: regular}
+  - {query: 这张衣服照片背景太乱了，帮我抠成透明底, expect: product_cutout, category: regular, image: true}
+  - {query: 明晚直播卖洗发水，帮我准备一套讲解话术, expect: livestream_script, category: regular}
+  - {query: 被公司无故辞退了，能要多少赔偿, expect: legal_consult, category: regular}
+  - {query: 想练出腹肌，每周应该怎么安排训练, expect: fitness_coach, category: regular}
+  - {query: 家里有排骨和玉米，晚饭做什么好, expect: recipe_helper, category: regular}
+
+  # ---- confusable: must be told apart from a look-alike agent ----
+  - {query: 去大阪玩 4 天，住哪个区域方便, expect: hotel_booking, category: confusable}
+  - {query: 帮我安排一下去巴黎的十日游，每天去哪些景点, expect: trip_planner, category: confusable}
+  - {query: 下周去东京，往返机票什么时候买最划算, expect: flight_deals, category: confusable}
+  - {query: 去美国读书要准备什么签证材料, expect: visa_consult, category: confusable}
+  - {query: 把今天的部门例会记录整理一下，标出每个人的任务, expect: meeting_minutes, category: confusable}
+  - {query: 把本周三个项目的进展写成给老板的汇报, expect: weekly_report, category: confusable}
+  - {query: 把这份周报内容做成几页汇报用的幻灯片, expect: ppt_outline, category: confusable}
+  - {query: 给这款口红的照片配一段小红书文案, expect: product_copy, category: confusable, image: true}
+  - {query: 用这张商品图做一张双十二的促销主图, expect: poster_design, category: confusable, image: true}
+  - {query: 直播间要推一款空气炸锅，开场怎么说, expect: livestream_script, category: confusable}
+
+  # ---- context: the last message alone is ambiguous ----
+  - query: 帮我整理成给领导看的版本
+    expect: weekly_report
+    category: context
+    history: [用户：这周我主要做了接口联调和需求评审，还修了几个线上问题]
+  - query: 帮我整理一下要点
+    expect: meeting_minutes
+    category: context
+    history: [用户：我们刚开完产品评审会，讨论了上线时间和分工]
+  - query: 那住的地方呢
+    expect: hotel_booking
+    category: context
+    history: [用户：国庆想去日本玩五天]
+  - query: 帮我写点能吸引人下单的话
+    expect: product_copy
+    category: context
+    history: [用户：我在淘宝开了家手工皂店，最近上了新品]
+  - query: 需要提前办什么手续吗
+    expect: visa_consult
+    category: context
+    history: [用户：下个月要去英国参加学术会议]
+
+  # ---- none: no onboarded agent fits ----
+  - {query: 今天北京天气怎么样, expect: null, category: none}
+  - {query: 帮我算一下 123 乘以 456 等于多少, expect: null, category: none}
+  - {query: 给我讲个笑话, expect: null, category: none}
+  - {query: Python 里怎么反转一个列表, expect: null, category: none}
+  - {query: 最近有什么好看的电影推荐, expect: null, category: none}
