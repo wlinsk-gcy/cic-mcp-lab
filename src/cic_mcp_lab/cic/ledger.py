@@ -1,4 +1,4 @@
-"""In-memory credit ledger: each billable turn is settled once, keyed by its taskId (design §5)."""
+"""In-memory credit ledger: each billable turn is settled once, keyed by provider and taskId (design §5)."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -21,13 +21,15 @@ class LedgerEntry:
 
 class Ledger:
     def __init__(self) -> None:
-        self._entries: dict[str, LedgerEntry] = {}
+        # taskIds are only unique per provider, so entries are keyed by (provider_id, settlement_key).
+        self._entries: dict[tuple[str, str], LedgerEntry] = {}
 
     def settle(self, entry: LedgerEntry) -> bool:
-        """Record a billable turn; False when its settlement key was already recorded."""
-        if entry.settlement_key in self._entries:
+        """Record a billable turn; False when this provider's settlement key was already recorded."""
+        key = (entry.provider_id, entry.settlement_key)
+        if key in self._entries:
             return False
-        self._entries[entry.settlement_key] = entry
+        self._entries[key] = entry
         return True
 
     @property

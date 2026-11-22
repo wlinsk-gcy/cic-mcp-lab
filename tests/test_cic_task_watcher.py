@@ -6,7 +6,7 @@ import pytest
 from mcp.shared.exceptions import MCPError
 
 from cic_mcp_lab.cic.ledger import Ledger
-from cic_mcp_lab.cic.mcp_client import CreateTaskResult, TaskSnapshot, TaskSubscription
+from cic_mcp_lab.cic.mcp_client import CreateTaskResult, ProviderUnavailable, TaskSnapshot, TaskSubscription
 from cic_mcp_lab.cic.registry import AgentRecord
 from cic_mcp_lab.cic.task_watcher import ConversationBusy, SubmitFailed, TaskWatcher
 from tests.helpers import TEST_API_KEY, unused_port
@@ -97,6 +97,17 @@ async def test_turns_of_one_conversation_never_overlap(start_server):
     assert outcome.reply.reply == "echo: third"
 
 
+async def test_a_finished_watch_never_frees_the_next_turns_busy_mark(start_server):
+    url, _ = start_server()
+    async with TaskWatcher({"trip_planner": record_for(url)}, Ledger(), env=ENV) as watcher:
+        await watcher.submit("trip_planner", "first", conversation_id="conv_1")
+        await next_outcome(watcher)
+        await watcher.submit("trip_planner", "sleep=2;second", conversation_id="conv_1")
+        await anyio.sleep(0.5)  # the first watch has finished tearing down by now
+        with pytest.raises(ConversationBusy):
+            await watcher.submit("trip_planner", "third", conversation_id="conv_1")
+
+
 async def test_submissions_that_never_reach_the_agent_fail(start_server):
     url, _ = start_server()
     registry = {
@@ -179,3 +190,66 @@ async def test_tasks_that_vanish_or_outlive_their_ttl(script, ttl_ms, failure):
         outcome = await next_outcome(watcher)
 
     assert outcome.failure == failure
+
+
+async def test_closing_the_watcher_fails_pending_submissions():
+    class Hanging(ScriptedClient):
+        async def submit(self, tool, arguments):
+            await anyio.sleep_forever()
+
+    watcher = scripted_watcher(Hanging(["working"]))
+    async with anyio.create_task_group() as tg:
+        async def close_soon():
+            await anyio.sleep(0.2)
+            await watcher.aclose()
+
+        tg.start_soon(close_soon)
+        with anyio.fail_after(5), pytest.raises(SubmitFailed):
+            await watcher.submit("trip_planner", "hi")
+
+
+async def test_a_failed_recheck_falls_back_to_push_and_backstop_polls():
+    script = [MCPError(-32603, "transient"), "working", "completed"]
+    async with scripted_watcher(ScriptedClient(script)) as watcher:
+        await watcher.submit("trip_planner", "hi")
+        outcome = await next_outcome(watcher)
+
+    assert (outcome.ok, outcome.delivery) == (True, "poll")
+    assert any("re-check failed" in note for note in outcome.notes)
+
+
+class DroppedPushClient(ScriptedClient):
+    """The push stream breaks mid-watch, the way a dropped connection surfaces from the SDK."""
+
+    @asynccontextmanager
+    async def listen(self, task_ids):
+        send, recv = anyio.create_memory_object_stream(1)
+        recv.close()
+        with send:
+            yield TaskSubscription(frozenset(task_ids), recv)
+
+
+class Unreachable:
+    async def __aenter__(self):
+        raise ProviderUnavailable("http://scripted/mcp: ConnectError")
+
+    async def __aexit__(self, *exc_info):
+        pass
+
+
+@pytest.mark.parametrize(("reconnects", "failure"), [(["completed"], None), ([], "lost")])
+async def test_watch_reconnects_and_polls_after_the_connection_breaks(reconnects, failure):
+    clients = iter([DroppedPushClient(["working"]), *(ScriptedClient([status]) for status in reconnects)])
+    watcher = TaskWatcher(
+        {"trip_planner": record_for("http://scripted/mcp")},
+        Ledger(),
+        env=ENV,
+        client_factory=lambda url, key: next(clients, Unreachable()),
+        backstop_poll_seconds=0.05,
+    )
+    async with watcher:
+        await watcher.submit("trip_planner", "hi")
+        outcome = await next_outcome(watcher)
+
+    assert outcome.failure == failure
+    assert any("reconnecting" in note for note in outcome.notes)

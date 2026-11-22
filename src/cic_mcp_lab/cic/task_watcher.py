@@ -6,9 +6,9 @@ billable replies are settled in the Ledger once per taskId. Production runs this
 from __future__ import annotations
 
 import asyncio
-import itertools
 import os
 import time
+import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -97,6 +97,15 @@ def _check_deadline(deadline: float | None) -> None:
         raise _TaskGone("expired", "ttlMs elapsed before the task reached a final state")
 
 
+def _poll_interval(handle: CreateTaskResult) -> float:
+    return (handle.poll_interval_ms or DEFAULT_POLL_INTERVAL_MS) / 1000
+
+
+def _fail_unaccepted(accepted: asyncio.Future[Submission], agent_id: str) -> None:
+    if not accepted.done():
+        accepted.set_exception(SubmitFailed(f"{agent_id}: the watcher closed before the turn was accepted"))
+
+
 class TaskWatcher:
     """Submits agent turns and reports each turn's final outcome on `outcomes`.
 
@@ -118,9 +127,9 @@ class TaskWatcher:
         self._env = env
         self._backstop_seconds = backstop_poll_seconds
         self.outcomes: asyncio.Queue[TaskOutcome] = asyncio.Queue()
-        self._ids = itertools.count(1)
         self._watches: set[asyncio.Task[None]] = set()
-        self._busy: set[tuple[str, str]] = set()
+        # (agent_id, conversation_id) -> the submission that owns the conversation's in-flight turn
+        self._busy: dict[tuple[str, str], str] = {}
 
     async def __aenter__(self) -> TaskWatcher:
         return self
@@ -149,18 +158,18 @@ class TaskWatcher:
             api_key = api_key_for(record, self._env)
         except RegistryError as exc:
             raise SubmitFailed(str(exc)) from exc
+        submission_id = f"sub_{uuid.uuid4().hex[:12]}"
         busy_key = (agent_id, conversation_id) if conversation_id else None
         if busy_key is not None:
             if busy_key in self._busy:
                 raise ConversationBusy(f"{agent_id}: conversation {conversation_id} is still working on the previous turn")
-            self._busy.add(busy_key)
+            self._busy[busy_key] = submission_id
         arguments: dict[str, Any] = {"message": message}
         if conversation_id:
             arguments["conversation_id"] = conversation_id
         if image_urls:
             arguments["image_urls"] = list(image_urls)
 
-        submission_id = f"sub_{next(self._ids)}"
         accepted: asyncio.Future[Submission] = asyncio.get_running_loop().create_future()
         watch = asyncio.create_task(
             self._watch(submission_id, record, api_key, arguments, busy_key, accepted),
@@ -170,14 +179,17 @@ class TaskWatcher:
 
         def forget(task: asyncio.Task[None]) -> None:
             self._watches.discard(task)
-            self._release(busy_key)
+            self._release(busy_key, submission_id)
+            # Runs even when the watch was cancelled before it started, so the caller never waits forever.
+            _fail_unaccepted(accepted, agent_id)
 
         watch.add_done_callback(forget)
         return await accepted
 
-    def _release(self, busy_key: tuple[str, str] | None) -> None:
-        if busy_key is not None:
-            self._busy.discard(busy_key)
+    def _release(self, busy_key: tuple[str, str] | None, submission_id: str) -> None:
+        """Free the conversation, unless a later turn already owns it."""
+        if busy_key is not None and self._busy.get(busy_key) == submission_id:
+            del self._busy[busy_key]
 
     async def _watch(
         self,
@@ -200,7 +212,7 @@ class TaskWatcher:
                 accepted.set_result(Submission(submission_id, record.agent_id, task_id, warnings))
 
         def reject(exc: BaseException) -> None:
-            self._release(busy_key)
+            self._release(busy_key, submission_id)
             if not accepted.done():
                 accepted.set_exception(SubmitFailed(f"{record.agent_id}: {describe_error(exc)}"))
 
@@ -209,7 +221,7 @@ class TaskWatcher:
             if finished:
                 return
             finished = True
-            self._release(busy_key)  # before the outcome is visible, so the next turn can go right away
+            self._release(busy_key, submission_id)  # before the outcome is visible, so the next turn can go
             self.outcomes.put_nowait(
                 TaskOutcome(
                     submission_id,
@@ -224,42 +236,54 @@ class TaskWatcher:
                 )
             )
 
+        handle: CreateTaskResult | None = None
+        deadline: float | None = None
         try:
-            async with self._client_factory(record.mcp_url, api_key) as client:
-                if not client.supports_tasks:
-                    # The call blocks until the agent answers: accept now and report the answer as the outcome.
-                    notes.append("provider has no tasks extension; waiting for a direct answer")
-                    accept()
-                try:
-                    handle = await client.submit(record.entry_tool, arguments)
-                except Exception as exc:
-                    if submitted:
-                        finish(_Verdict(None, failure="agent_error", detail=describe_error(exc)))
-                    else:
-                        reject(exc)
-                    return
-                if not isinstance(handle, CreateTaskResult):
-                    accept()
-                    finish(self._settle(record, submission_id, handle, "direct"))
-                    return
-                task_id = handle.task_id
-                warning = check_task_ttl(handle.ttl_ms)
-                accept((warning,) if warning else ())
-                deadline = None if handle.ttl_ms is None else started + handle.ttl_ms / 1000
-                try:
-                    state, delivery = await self._follow(client, handle, deadline, notes)
-                except _TaskGone as gone:
-                    finish(_Verdict(None, failure=gone.failure, detail=gone.detail))
-                    return
-                finish(self._conclude(record, state, delivery))
+            try:
+                async with self._client_factory(record.mcp_url, api_key) as client:
+                    if not client.supports_tasks:
+                        # The call blocks until the agent answers: accept now and report the answer as the outcome.
+                        notes.append("provider has no tasks extension; waiting for a direct answer")
+                        accept()
+                    try:
+                        result = await client.submit(record.entry_tool, arguments)
+                    except Exception as exc:
+                        if submitted:
+                            finish(_Verdict(None, failure="agent_error", detail=describe_error(exc)))
+                        else:
+                            reject(exc)
+                        return
+                    if not isinstance(result, CreateTaskResult):
+                        accept()
+                        finish(self._settle(record, submission_id, result, "direct"))
+                        return
+                    handle = result
+                    task_id = handle.task_id
+                    warning = check_task_ttl(handle.ttl_ms)
+                    accept((warning,) if warning else ())
+                    deadline = None if handle.ttl_ms is None else started + handle.ttl_ms / 1000
+                    try:
+                        state, delivery = await self._follow(client, handle, deadline, notes)
+                    except _TaskGone as gone:
+                        finish(_Verdict(None, failure=gone.failure, detail=gone.detail))
+                        return
+                    finish(self._conclude(record, state, delivery))
+            except Exception as exc:
+                if handle is None or finished:
+                    raise
+                # The SDK surfaces a broken connection from the client context; the task itself lives on.
+                notes.append(f"connection to the provider failed ({describe_error(exc)}); reconnecting to poll")
+                snapshot = await self._repoll(record, api_key, handle.task_id, deadline, _poll_interval(handle))
+                finish(self._conclude(record, snapshot, "poll"))
+        except _TaskGone as gone:
+            finish(_Verdict(None, failure=gone.failure, detail=gone.detail))
         except Exception as exc:
             if submitted:
                 finish(_Verdict(None, failure="internal", detail=describe_error(exc)))
             else:
                 reject(exc)
         finally:
-            if not accepted.done():
-                accepted.cancel()
+            _fail_unaccepted(accepted, record.agent_id)
 
     async def _follow(
         self, client: ProviderClient, handle: CreateTaskResult, deadline: float | None, notes: list[str]
@@ -269,9 +293,15 @@ class TaskWatcher:
         try:
             async with client.listen([task_id]) as subscription:
                 if task_id in subscription.accepted:
-                    snapshot = await self._get(client, task_id, deadline)
-                    if snapshot.status in TERMINAL_STATUSES:
-                        return snapshot, "recheck"
+                    try:
+                        snapshot = await self._get(client, task_id, deadline)
+                    except _TaskGone:
+                        raise
+                    except Exception as exc:
+                        notes.append(f"re-check failed ({describe_error(exc)}); waiting for push")
+                    else:
+                        if snapshot.status in TERMINAL_STATUSES:
+                            return snapshot, "recheck"
                     pushed = await self._await_push(client, task_id, subscription.events, deadline, notes)
                     if pushed is not None:
                         return pushed
@@ -279,8 +309,7 @@ class TaskWatcher:
                     notes.append("provider did not accept the push subscription; polling")
         except ListenFailed as exc:
             notes.append(f"push subscription failed ({exc}); polling")
-        interval = (handle.poll_interval_ms or DEFAULT_POLL_INTERVAL_MS) / 1000
-        return await self._poll(client, task_id, deadline, interval), "poll"
+        return await self._poll(client, task_id, deadline, _poll_interval(handle)), "poll"
 
     async def _await_push(
         self,
@@ -331,6 +360,24 @@ class TaskWatcher:
                     return snapshot
                 _check_deadline(deadline)
             await anyio.sleep(_remaining(interval, deadline))
+
+    async def _repoll(
+        self, record: AgentRecord, api_key: str, task_id: str, deadline: float | None, interval: float
+    ) -> TaskSnapshot:
+        """Poll over fresh connections after the watch connection broke; MAX_POLL_ERRORS failures in a row → lost."""
+        errors = 1  # the failure that brought us here
+        while True:
+            _check_deadline(deadline)
+            await anyio.sleep(_remaining(interval, deadline))
+            try:
+                async with self._client_factory(record.mcp_url, api_key) as client:
+                    return await self._poll(client, task_id, deadline, interval)
+            except _TaskGone:
+                raise
+            except Exception as exc:
+                errors += 1
+                if errors >= MAX_POLL_ERRORS:
+                    raise _TaskGone("lost", f"provider unreachable after {errors} attempts: {describe_error(exc)}") from exc
 
     async def _get(self, client: ProviderClient, task_id: str, deadline: float | None) -> TaskSnapshot:
         try:
