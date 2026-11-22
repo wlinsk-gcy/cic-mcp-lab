@@ -2,13 +2,16 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Mapping
+from typing import Mapping, TypeVar
 
 from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+T = TypeVar("T")
 
 
 class ConfigError(RuntimeError):
@@ -28,6 +31,10 @@ class Settings:
     oss_bucket: str
     oss_access_key_id: str = field(repr=False)
     oss_access_key_secret: str = field(repr=False)
+    qdrant_path: Path = PROJECT_ROOT / "data" / "qdrant"
+    recall_top_n: int = 20
+    recommend_top_k: int = 2
+    recommend_min_score_dense: float | None = None  # chosen by the step 5 evaluation; unset = no threshold
 
 
 _REQUIRED = (
@@ -61,6 +68,17 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     def get(name: str) -> str:
         return env[name].strip()
 
+    def optional(name: str, parse: Callable[[str], T], default: T) -> T:
+        raw = env.get(name, "").strip()
+        if not raw:
+            return default
+        try:
+            return parse(raw)
+        except ValueError as exc:
+            raise ConfigError(f"{name} is not a valid {parse.__name__}: {raw!r}") from exc
+
+    qdrant_path = Path(env.get("QDRANT_PATH", "").strip() or "data/qdrant")
+
     return Settings(
         dashscope_base_url=get("DASHSCOPE_BASE_URL"),
         dashscope_api_key=get("DASHSCOPE_API_KEY"),
@@ -75,4 +93,8 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         oss_bucket=get("OSS_BUCKET"),
         oss_access_key_id=get("OSS_ACCESS_KEY_ID"),
         oss_access_key_secret=get("OSS_ACCESS_KEY_SECRET"),
+        qdrant_path=qdrant_path if qdrant_path.is_absolute() else PROJECT_ROOT / qdrant_path,
+        recall_top_n=optional("RECALL_TOP_N", int, 20),
+        recommend_top_k=optional("RECOMMEND_TOP_K", int, 2),
+        recommend_min_score_dense=optional("RECOMMEND_MIN_SCORE_DENSE", float, None),
     )
