@@ -20,6 +20,8 @@ dependencies = [
 [project.scripts]
 cic-smoke = "cic_mcp_lab.smoke:main"
 provider-agent = "cic_mcp_lab.provider.cli:main"
+provider-server = "cic_mcp_lab.provider.server:main"
+provider-check = "cic_mcp_lab.provider.check:main"
 
 [build-system]
 requires = ["uv_build>=0.11.14,<0.12.0"]

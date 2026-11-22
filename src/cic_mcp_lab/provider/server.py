@@ -1,10 +1,14 @@
 """MCP Server for one mock provider: one entry tool per agent, tasks extension, API-key auth."""
 from __future__ import annotations
 
+import argparse
 import asyncio
+import logging
+import os
 from collections.abc import Sequence
 from typing import Annotated, Any, Protocol
 
+import uvicorn
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
@@ -12,7 +16,16 @@ from mcp_types import CallToolResult, TextContent
 from pydantic import Field
 from starlette.types import ASGIApp
 
-from .agent import AgentResult, ImagesNotSupportedError, InvalidImageUrlError, UnknownConversationError
+from ..config import load_settings
+from ..llm import make_chat_model
+from .agent import (
+    AgentResult,
+    ImagesNotSupportedError,
+    InvalidImageUrlError,
+    ProviderAgentRuntime,
+    UnknownConversationError,
+    make_agent_factory,
+)
 from .auth import ApiKeyVerifier
 from .catalog import CATALOG, AgentSpec
 from .mcp_tasks import TasksExtension, TasksListenMiddleware
@@ -112,3 +125,37 @@ def build_app(
             description=spec.description,
         )
     return mcp.streamable_http_app(host="127.0.0.1")
+
+
+_API_KEY_ENV = {"A": "PROVIDER_A_API_KEY", "B": "PROVIDER_B_API_KEY"}
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="启动模拟 Provider 的 MCP Server")
+    parser.add_argument("--provider", choices=sorted(_API_KEY_ENV), required=True)
+    parser.add_argument("--port", type=int, required=True)
+    parser.add_argument("--delay", type=float, default=0.0, help="每轮调用 Agent 前额外等待的秒数（模拟长任务）")
+    parser.add_argument("--no-push", action="store_true", help="不接受 taskIds 订阅（模拟不支持推送的 Provider）")
+    args = parser.parse_args()
+
+    settings = load_settings()
+    key_env = _API_KEY_ENV[args.provider]
+    api_key = os.environ.get(key_env, "").strip()
+    if not api_key:
+        raise SystemExit(f"Missing {key_env} in .env")
+    provider_id = f"provider-{args.provider.lower()}"
+    runtime = ProviderAgentRuntime(
+        provider_specs(provider_id),
+        make_agent_factory(make_chat_model(settings, settings.provider_model)),
+    )
+    app = build_app(
+        provider_id=provider_id,
+        api_key=api_key,
+        runtime=runtime,
+        delay_seconds=args.delay,
+        push_enabled=not args.no_push,
+        ttl_ms=int(os.environ.get("PROVIDER_TASK_TTL_MS", "3600000")),
+        poll_interval_ms=int(os.environ.get("PROVIDER_POLL_INTERVAL_MS", "2000")),
+    )
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="info")
