@@ -155,11 +155,14 @@ def test_task_is_returned_immediately_and_its_result_is_pushed(start_server):
             ack = next(messages)
             assert ack["method"] == "notifications/subscriptions/acknowledged"
             assert ack["params"]["notifications"]["taskIds"] == [task_id]
-            pushed = next(
-                message["params"]
-                for message in messages
-                if message.get("method") == "notifications/tasks" and message["params"]["status"] == "completed"
-            )
+            deadline = time.monotonic() + 10
+            pushed = None
+            for message in messages:
+                if message.get("method") == "notifications/tasks" and message["params"]["status"] == "completed":
+                    pushed = message["params"]
+                    break
+                assert time.monotonic() < deadline, "no completed push within 10 s"
+            assert pushed is not None
         polled = client.get_task(task_id).result
 
     assert pushed["result"]["_meta"]["com.cic/credit_usage"] == 42
@@ -185,7 +188,8 @@ def test_cancel_stops_the_running_agent(start_server):
         task_id = client.call_tool("trip_planner", {"message": "sleep=30;long"}).result["taskId"]
         assert client.cancel_task(task_id).error is None
         assert client.get_task(task_id).result["status"] == "cancelled"
-        assert client.cancel_task(task_id).error["code"] == -32602
+        assert client.cancel_task(task_id).error is None  # cancelling a finished task is acknowledged
+        assert client.cancel_task("unknown-task").error["code"] == -32602
 
     assert runtime.cancelled.wait(timeout=5)
 
@@ -197,6 +201,34 @@ def test_task_requests_must_name_the_task_in_the_mcp_name_header(start_server):
         resp = client.request("tasks/get", {"taskId": task_id})
 
     assert resp.error["code"] == -32020
+
+
+def test_task_methods_require_the_client_to_declare_the_extension(start_server):
+    url, _ = start_server()
+    with WireClient(url, KEY) as client:
+        task_id = client.call_tool("trip_planner", {"message": "hello"}).result["taskId"]
+        responses = [
+            client.request("tasks/get", {"taskId": task_id}, tasks=False, name=task_id),
+            client.request("tasks/cancel", {"taskId": task_id}, tasks=False, name=task_id),
+            client.request("subscriptions/listen", {"notifications": {"taskIds": [task_id]}}, tasks=False),
+        ]
+
+    for resp in responses:
+        assert resp.error["code"] == -32021
+        assert resp.error["data"]["requiredCapabilities"]["extensions"] == {TASKS_EXTENSION: {}}
+
+
+def test_listen_delivers_every_already_finished_task(start_server):
+    url, _ = start_server(poll_interval_ms=50)
+    with WireClient(url, KEY) as client:
+        task_ids = [client.call_tool("trip_planner", {"message": f"m{i}"}).result["taskId"] for i in range(300)]
+        for task_id in task_ids:
+            wait_for_terminal(client, task_id)
+        with client.listen_tasks(task_ids) as messages:
+            assert len(next(messages)["params"]["notifications"]["taskIds"]) == 300
+            pushed = {next(messages)["params"]["taskId"] for _ in range(300)}
+
+    assert pushed == set(task_ids)
 
 
 def test_agent_errors_complete_the_task_with_is_error(start_server):

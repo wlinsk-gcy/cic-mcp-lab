@@ -13,6 +13,7 @@ from mcp.shared.subscriptions import SUBSCRIPTION_ID_META_KEY
 from mcp_types import (
     HEADER_MISMATCH,
     INVALID_PARAMS,
+    MISSING_REQUIRED_CLIENT_CAPABILITY,
     CallToolRequestParams,
     Notification,
     RequestParams,
@@ -50,6 +51,15 @@ def client_declared_tasks(ctx: ServerRequestContext[Any, Any]) -> bool:
         return False
     capabilities = ctx.session.client_capabilities
     return bool(capabilities and capabilities.extensions and TASKS_EXTENSION in capabilities.extensions)
+
+
+def _require_tasks_extension(ctx: ServerRequestContext[Any, Any]) -> None:
+    if not client_declared_tasks(ctx):
+        raise MCPError(
+            MISSING_REQUIRED_CLIENT_CAPABILITY,
+            f"Client did not declare required extension {TASKS_EXTENSION!r}",
+            data={"requiredCapabilities": {"extensions": {TASKS_EXTENSION: {}}}},
+        )
 
 
 def _check_mcp_name(ctx: ServerRequestContext[Any, Any], task_id: str) -> None:
@@ -99,16 +109,18 @@ class TasksExtension(Extension):
         return {"resultType": "task", **record.task_fields()}
 
     async def _tasks_get(self, ctx: ServerRequestContext[Any, Any], params: TaskIdParams) -> dict[str, Any]:
+        _require_tasks_extension(ctx)
         _check_mcp_name(ctx, params.task_id)
         return {"resultType": "complete", **self._find(params.task_id).detailed()}
 
     async def _tasks_cancel(self, ctx: ServerRequestContext[Any, Any], params: TaskIdParams) -> dict[str, Any]:
+        _require_tasks_extension(ctx)
         _check_mcp_name(ctx, params.task_id)
         self._find(params.task_id)
         try:
             self._store.cancel(params.task_id, current_owner())
-        except TaskAlreadyFinishedError as exc:
-            raise MCPError(INVALID_PARAMS, str(exc)) from None
+        except TaskAlreadyFinishedError:
+            pass  # Cancellation is eventually consistent: a finished task is acknowledged and left unchanged.
         return {"resultType": "complete"}
 
     def _find(self, task_id: str) -> TaskRecord:
@@ -133,6 +145,7 @@ class TasksListenMiddleware:
         raw_filter = (ctx.params or {}).get("notifications")
         if not isinstance(raw_filter, dict) or "taskIds" not in raw_filter:
             return await call_next(ctx)
+        _require_tasks_extension(ctx)
 
         params = SubscriptionsListenRequestParams.model_validate(ctx.params, by_name=False)
         requested = [
@@ -142,6 +155,13 @@ class TasksListenMiddleware:
         ]
         owner = current_owner()
         meta = {SUBSCRIPTION_ID_META_KEY: ctx.request_id}
+
+        async def push(snapshot: dict[str, Any]) -> None:
+            await ctx.session.send_notification(
+                TasksNotification(params={**snapshot, "_meta": meta}),  # type: ignore[arg-type]
+                related_request_id=ctx.request_id,
+            )
+
         send, recv = anyio.create_memory_object_stream[dict[str, Any]](256)
         accepted, unsubscribe = self._store.subscribe(owner, requested, send)
         # Snapshot before any await: tasks finishing later are pushed by the store, so each arrives exactly once.
@@ -159,13 +179,11 @@ class TasksListenMiddleware:
                 ),
                 related_request_id=ctx.request_id,
             )
+            # Sent directly rather than queued: there can be more of them than the stream buffer holds.
             for snapshot in already_finished:
-                send.send_nowait(snapshot)
+                await push(snapshot)
             async for snapshot in recv:
-                await ctx.session.send_notification(
-                    TasksNotification(params={**snapshot, "_meta": meta}),  # type: ignore[arg-type]
-                    related_request_id=ctx.request_id,
-                )
+                await push(snapshot)
         finally:
             unsubscribe()
             send.close()
