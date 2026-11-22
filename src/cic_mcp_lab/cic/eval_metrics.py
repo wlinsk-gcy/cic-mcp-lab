@@ -52,6 +52,7 @@ class Scored:
     item: EvalQuery
     ranking: tuple[tuple[str, float], ...]
     latency_ms: float
+    rewritten: str | None = None  # V4: the search query after rewriting, or why nothing was recommended
 
     @property
     def top_score(self) -> float:

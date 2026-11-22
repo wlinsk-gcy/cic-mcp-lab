@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from ..config import PROJECT_ROOT, load_settings
+from ..llm import make_openai_client
 from .eval_metrics import (
     CATEGORY_LABELS,
     EvalQuery,
@@ -22,14 +23,22 @@ from .eval_metrics import (
     separation,
     threshold_stats,
 )
+from .intent import LlmIntentRecognizer
 from .recommend.embedding import Embedder, make_embedder
 from .recommend.recommender import Recommender
 from .recommend.rerank import INSTRUCT, Reranker, make_reranker
 from .recommend.vector_store import QdrantVectorStore
 from .registry import AgentRecord, load_registry
+from .router import Recognizer
+from .session import Session, Turn
 
-VARIANTS = ("V1", "V2", "V3")
-DESCRIPTIONS = {"V1": "只用画像（等同于删除全部示例问题）", "V2": "画像 + 示例问题", "V3": "画像 + 示例问题 + Rerank"}
+VARIANTS = ("V1", "V2", "V3", "V4")
+DESCRIPTIONS = {
+    "V1": "只用画像（等同于删除全部示例问题）",
+    "V2": "画像 + 示例问题",
+    "V3": "画像 + 示例问题 + Rerank",
+    "V4": "V3 + 查询改写（意图识别给出的 search_query）",
+}
 SWEEP = tuple(round(0.20 + 0.05 * step, 2) for step in range(13))  # 0.20 … 0.80
 EVAL_RECALL = 50  # recall every onboarded agent: the evaluation ranks the whole field
 
@@ -41,29 +50,61 @@ def build_recommenders(
     reranker: Reranker | None,
     variants: Sequence[str],
 ) -> dict[str, Recommender]:
-    options: dict[str, dict] = {"V1": {"kinds": ("profile",)}, "V2": {}, "V3": {"reranker": reranker}}
-    if "V3" in variants and reranker is None:
-        raise ValueError("V3 needs a reranker")
+    options: dict[str, dict] = {
+        "V1": {"kinds": ("profile",)},
+        "V2": {},
+        "V3": {"reranker": reranker},
+        "V4": {"reranker": reranker},
+    }
+    if ("V3" in variants or "V4" in variants) and reranker is None:
+        raise ValueError("V3/V4 need a reranker")
     return {
         name: Recommender(embedder, store, registry, recall_top_n=EVAL_RECALL, **options[name]) for name in variants
     }
 
 
 async def run_eval(
-    items: Sequence[EvalQuery], recommenders: Mapping[str, Recommender], embedder: Embedder
+    items: Sequence[EvalQuery],
+    recommenders: Mapping[str, Recommender],
+    embedder: Embedder,
+    recognizer: Recognizer | None = None,
 ) -> dict[str, list[Scored]]:
-    """Rank every query with every variant; each query is embedded once and shared by all variants."""
+    """Rank every query with every variant. V1-V3 share one embedding of the raw query; V4 rewrites it first."""
+    if "V4" in recommenders and recognizer is None:
+        raise ValueError("V4 needs an intent recognizer")
     results: dict[str, list[Scored]] = {name: [] for name in recommenders}
+    shared = [name for name in recommenders if name != "V4"]
     for item in items:
-        started = time.perf_counter()
-        [vector] = await embedder.embed([item.query])
-        embed_ms = (time.perf_counter() - started) * 1000
-        for name, recommender in recommenders.items():
+        if shared:
             started = time.perf_counter()
-            ranking = await recommender.rank(item.query, vector=vector, with_image=item.image, include_mock=True)
-            elapsed_ms = embed_ms + (time.perf_counter() - started) * 1000
-            results[name].append(Scored(item, tuple((pick.agent_id, pick.score) for pick in ranking), elapsed_ms))
+            [vector] = await embedder.embed([item.query])
+            embed_ms = (time.perf_counter() - started) * 1000
+            for name in shared:
+                started = time.perf_counter()
+                ranking = await recommenders[name].rank(
+                    item.query, vector=vector, with_image=item.image, include_mock=True
+                )
+                elapsed_ms = embed_ms + (time.perf_counter() - started) * 1000
+                results[name].append(Scored(item, tuple((p.agent_id, p.score) for p in ranking), elapsed_ms))
+        if "V4" in recommenders:
+            results["V4"].append(await _rewrite_and_rank(item, recommenders["V4"], embedder, recognizer))
     return results
+
+
+async def _rewrite_and_rank(
+    item: EvalQuery, recommender: Recommender, embedder: Embedder, recognizer: Recognizer
+) -> Scored:
+    """V4: what the Router would do — recognise the intent, then search with the rewritten query."""
+    started = time.perf_counter()
+    session = Session(history=[Turn("user", turn.removeprefix("用户：")) for turn in item.history])
+    decision = await recognizer.recognize(session, item.query, 1 if item.image else 0)
+    if decision.intent != "recommend":
+        return Scored(item, (), (time.perf_counter() - started) * 1000, f"（{decision.intent}，不推荐）")
+    query = decision.search_query or item.query
+    [vector] = await embedder.embed([query])
+    ranking = await recommender.rank(query, vector=vector, with_image=item.image, include_mock=True)
+    elapsed_ms = (time.perf_counter() - started) * 1000
+    return Scored(item, tuple((p.agent_id, p.score) for p in ranking), elapsed_ms, query)
 
 
 def _pct(value: float) -> str:
@@ -107,6 +148,7 @@ def render_report(
         "> - 「期望 Agent 得分」统计所有有期望 Agent 的问题中该 Agent 自身的得分（不论排名），各方案基于同一批问题；"
         "「无关问题最高分」是「无合适 Agent」类问题的最高分。",
         "> - 建议阈值取使（拦截率 − 误拦截率）最大的分数线。V3 的分数是 Rerank 分，与 V1 / V2 的向量分不可直接比较。",
+        "> - V4 = 意图识别 + V3：意图不是 recommend 的问题视为 Router 不推荐（最高分 0，等同被拦截）；耗时包含意图识别。",
         "",
         "## 阈值扫描",
         "",
@@ -132,6 +174,16 @@ def render_report(
             lines.append(
                 f"| {result.item.query} | {CATEGORY_LABELS[result.item.category]} "
                 f"| {name_of(result.item.expect)}（{rank or '未召回'}） | {top3} |"
+            )
+        lines.append("")
+
+    if "V4" in results:
+        lines += ["## V4 查询改写", "", "| 问题 | 类别 | 改写后的检索语句 | 期望（排名） |", "| --- | --- | --- | --- |"]
+        for result in results["V4"]:
+            rank = result.rank_of_expected() if result.item.expect else None
+            expected = "—" if result.item.expect is None else f"{name_of(result.item.expect)}（{rank or '未推荐'}）"
+            lines.append(
+                f"| {result.item.query} | {CATEGORY_LABELS[result.item.category]} | {result.rewritten} | {expected} |"
             )
         lines.append("")
 
@@ -172,10 +224,13 @@ async def _evaluate(variants: list[str], output: Path | None) -> Path:
     )
     try:
         embedder = make_embedder(settings)
-        reranker = make_reranker(settings) if "V3" in variants else None
+        reranker = make_reranker(settings) if "V3" in variants or "V4" in variants else None
+        recognizer = (
+            LlmIntentRecognizer(make_openai_client(settings), settings.router_model) if "V4" in variants else None
+        )
         recommenders = build_recommenders(embedder, store, load_registry, reranker, variants)
         indexed = len(store.agent_ids())
-        results = await run_eval(items, recommenders, embedder)
+        results = await run_eval(items, recommenders, embedder, recognizer=recognizer)
     finally:
         store.close()
 
@@ -189,7 +244,7 @@ async def _evaluate(variants: list[str], output: Path | None) -> Path:
         "只在支持图片的 Agent 中检索",
         f"Embedding：{settings.embedding_model}（{settings.embedding_dim} 维，cosine）；"
         f"Rerank：{settings.rerank_model}（instruct：{INSTRUCT}）",
-        "依赖上下文类只用最后一句检索，没有做查询改写（V4 待 Step 6 补跑）",
+        "依赖上下文类：V1～V3 只用最后一句检索；V4 由意图识别结合前几轮对话改写",
         "每条问题只 Embedding 一次，各方案共用；耗时 = Embedding + 检索（+ Rerank）",
     ]
     if unavailable:
@@ -204,8 +259,10 @@ async def _evaluate(variants: list[str], output: Path | None) -> Path:
 
 def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8")
-    parser = argparse.ArgumentParser(description="推荐效果评测：V1（只用画像）/ V2（画像 + 示例问题）/ V3（+ Rerank）")
-    parser.add_argument("--variants", default=",".join(VARIANTS), help="逗号分隔，默认 V1,V2,V3")
+    parser = argparse.ArgumentParser(
+        description="推荐效果评测：V1（只用画像）/ V2（画像 + 示例问题）/ V3（+ Rerank）/ V4（+ 查询改写）"
+    )
+    parser.add_argument("--variants", default=",".join(VARIANTS), help="逗号分隔，默认 V1,V2,V3,V4")
     parser.add_argument("--output", type=Path, help="报告路径，默认 reports/step5-eval-<时间>.md")
     args = parser.parse_args()
     variants = [variant.strip().upper() for variant in args.variants.split(",") if variant.strip()]
