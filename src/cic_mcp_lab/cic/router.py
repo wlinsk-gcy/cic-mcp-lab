@@ -109,7 +109,8 @@ class Router:
         elif decision.intent == "supplement":
             await self._supplement(decision.thread_ref, text, images)
         elif decision.intent == "recommend":
-            await self._recommend(text, images, decision.search_query or text)
+            # v1 searches with the user's own words: the evaluation found rewriting (V4) did not help (decision 35).
+            await self._recommend(text, images, text)
         elif decision.intent == "clarify":
             await self._answer(
                 f"用户的意图不明确（{decision.reason}）。请用一两句话向用户澄清；涉及多个会话时列出 T1、T2… 让用户指明。"

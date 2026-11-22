@@ -103,7 +103,7 @@ async def test_chosen_agent_gets_the_original_message_and_images_in_a_new_thread
     await h.say("帮这个商品写文案", decide("recommend", search_query="为商品写营销文案"), images=["https://img/1.png"])
     await h.say("用第一个", decide("select_candidate", candidate_index=1))
 
-    assert h.recommender.calls == [("为商品写营销文案", True, ())]
+    assert h.recommender.calls == [("帮这个商品写文案", True, ())]  # v1 searches with the user's own words (decision 35)
     assert "[1] 商品文案" in h.texts("candidates")[0]
     assert h.submitter.calls == [("product_copy", "帮这个商品写文案", ("https://img/1.png",), None)]
     thread = h.router.session.threads["T1"]
