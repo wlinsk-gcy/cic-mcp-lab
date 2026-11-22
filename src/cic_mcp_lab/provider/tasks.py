@@ -161,18 +161,18 @@ class TaskStore:
         try:
             result = await work()
         except asyncio.CancelledError:
-            if not record.terminal:
-                self._transition(record, "cancelled", status_message="Cancelled by server")
+            self._transition(record, "cancelled", status_message="Cancelled by server")
             raise
         except TaskFailure as exc:
             self._transition(record, "failed", error=exc.error)
         except Exception as exc:  # safety net: tool exceptions normally arrive as isError results
             self._transition(record, "failed", error={"code": _INTERNAL_ERROR, "message": str(exc)})
         else:
-            if not record.terminal:  # cancelled while the work was finishing
-                self._transition(record, "completed", result=result)
+            self._transition(record, "completed", result=result)
 
     def _transition(self, record: TaskRecord, status: TaskStatus, **changes: Any) -> None:
+        if record.terminal:
+            return  # a finished task never changes state again
         record.status = status
         record.last_updated_at = _now_iso()
         for name, value in changes.items():
@@ -188,6 +188,8 @@ class TaskStore:
         now = self._clock()
         for task_id, record in list(self._tasks.items()):
             if now >= record.expires_at:
+                if not record.terminal:
+                    self._transition(record, "cancelled", status_message="Expired: TTL elapsed")
                 del self._tasks[task_id]
                 self._listeners.pop(task_id, None)
                 if record.runner is not None and not record.runner.done():

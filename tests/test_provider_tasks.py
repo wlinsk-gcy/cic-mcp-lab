@@ -65,6 +65,34 @@ async def test_cancel_stops_the_work_and_cannot_be_repeated():
         store.cancel(record.task_id, "cic")
 
 
+@pytest.mark.parametrize("error", [TaskFailure({"code": -32800, "message": "cancelled"}), RuntimeError("cleanup failed")])
+async def test_cancelled_task_stays_cancelled_even_if_the_work_raises_while_unwinding(error):
+    store = make_store()
+    started = asyncio.Event()
+
+    async def raise_on_cancel():
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            raise error
+
+    record = store.create("cic", raise_on_cancel)
+    send, recv = anyio.create_memory_object_stream[dict](8)
+    store.subscribe("cic", [record.task_id], send)
+    await started.wait()
+
+    store.cancel(record.task_id, "cic")
+    await asyncio.gather(record.runner, return_exceptions=True)
+
+    assert store.get(record.task_id, "cic").status == "cancelled"
+    assert [recv.receive_nowait()["status"]] == ["cancelled"]
+    with pytest.raises(anyio.WouldBlock):
+        recv.receive_nowait()
+    send.close()
+    recv.close()
+
+
 async def test_work_failure_marks_the_task_failed_with_the_error():
     store = make_store()
     error = {"code": -32603, "message": "boom"}
@@ -90,6 +118,26 @@ async def test_tasks_expire_after_their_ttl():
 
     with pytest.raises(UnknownTaskError):
         store.get(record.task_id, "cic")
+
+
+async def test_subscribers_are_told_when_a_running_task_expires():
+    now = [100.0]
+    store = make_store(ttl_ms=1_000, clock=lambda: now[0])
+
+    async def hang():
+        await asyncio.Event().wait()
+
+    record = store.create("cic", hang)
+    send, recv = anyio.create_memory_object_stream[dict](8)
+    store.subscribe("cic", [record.task_id], send)
+
+    now[0] += 1.0
+    assert store.find(record.task_id, "cic") is None
+    await asyncio.gather(record.runner, return_exceptions=True)
+
+    assert recv.receive_nowait()["status"] == "cancelled"
+    send.close()
+    recv.close()
 
 
 async def test_subscribers_receive_the_final_snapshot():
