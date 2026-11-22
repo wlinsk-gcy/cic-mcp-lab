@@ -150,10 +150,18 @@ class TaskWatcher:
         image_urls: Sequence[str] = (),
         conversation_id: str | None = None,
     ) -> Submission:
-        """Send one turn; returns once the provider has accepted it. The outcome arrives on `outcomes`."""
+        """Send one turn; returns once the provider has accepted it. The outcome arrives on `outcomes`.
+
+        The registry is consulted on every call, so delisting takes effect at once; turns already
+        accepted keep the record they were submitted with (design §13.10).
+        """
         record = self._registry.get(agent_id)
         if record is None:
             raise SubmitFailed(f"Unknown agent {agent_id!r}")
+        if not record.callable:
+            raise SubmitFailed(f"{agent_id} is a mock agent without an MCP endpoint")
+        if not record.published:
+            raise SubmitFailed(f"{agent_id} has been delisted")
         try:
             api_key = api_key_for(record, self._env)
         except RegistryError as exc:

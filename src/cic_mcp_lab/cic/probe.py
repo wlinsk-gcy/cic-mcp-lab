@@ -155,12 +155,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="对已入驻的 Agent 执行测试连接（设计文档 §4.2）")
     target = parser.add_mutually_exclusive_group(required=True)
     target.add_argument("agent_id", nargs="?", help="data/agents.yaml 中的 agent_id")
-    target.add_argument("--all", action="store_true", help="测试全部已入驻的 Agent")
+    target.add_argument("--all", action="store_true", help="测试全部可调用的 Agent（跳过模拟 Agent）")
     args = parser.parse_args()
     load_settings()  # loads .env into the process environment
     registry = load_registry()
-    agent_ids = sorted(registry) if args.all else [args.agent_id]
+    agent_ids = sorted(a for a, record in registry.items() if record.callable) if args.all else [args.agent_id]
     unknown = [agent_id for agent_id in agent_ids if agent_id not in registry]
     if unknown:
         raise SystemExit(f"Unknown agent: {', '.join(unknown)}")
+    mocks = [agent_id for agent_id in agent_ids if not registry[agent_id].callable]
+    if mocks:
+        raise SystemExit(f"模拟 Agent 没有 MCP 端点，无需测试连接：{', '.join(mocks)}")
     sys.exit(0 if asyncio.run(_probe_all(registry, agent_ids)) else 1)

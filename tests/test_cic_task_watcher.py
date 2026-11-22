@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from decimal import Decimal
 
 import anyio
@@ -122,6 +123,28 @@ async def test_submissions_that_never_reach_the_agent_fail(start_server):
     async with TaskWatcher(registry, Ledger(), env={}) as watcher:
         with pytest.raises(SubmitFailed, match="TEST_KEY"):
             await watcher.submit("trip_planner", "hi")
+
+
+async def test_delisting_blocks_new_turns_but_running_tasks_still_settle(start_server):
+    url, _ = start_server()
+    registry = {"trip_planner": record_for(url)}
+    ledger = Ledger()
+    async with TaskWatcher(registry, ledger, env=ENV) as watcher:
+        submission = await watcher.submit("trip_planner", "sleep=0.5;hi")
+        registry["trip_planner"] = replace(registry["trip_planner"], status="delisted")
+        with pytest.raises(SubmitFailed, match="delisted"):
+            await watcher.submit("trip_planner", "again")
+        outcome = await next_outcome(watcher)
+
+    assert outcome.ok
+    assert [entry.settlement_key for entry in ledger.entries] == [submission.task_id]
+
+
+async def test_mock_agents_cannot_be_called():
+    mock = AgentRecord("hotel_booking", "provider-mock", "n", "d", None, None, None, 0.0001)
+    async with TaskWatcher({"hotel_booking": mock}, Ledger(), env=ENV) as watcher:
+        with pytest.raises(SubmitFailed, match="mock agent"):
+            await watcher.submit("hotel_booking", "hi")
 
 
 class ScriptedClient:
