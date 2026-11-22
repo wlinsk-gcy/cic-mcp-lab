@@ -1,80 +1,10 @@
-import asyncio
-import socket
-import threading
 import time
-from collections.abc import Sequence
-from contextlib import ExitStack, contextmanager
 
 import httpx
 import pytest
-import uvicorn
 
 from cic_mcp_lab.mcpwire import TASKS_EXTENSION, WireClient
-from cic_mcp_lab.provider.agent import AgentResult, UnknownConversationError
-from cic_mcp_lab.provider.server import build_app
-
-KEY = "sk-test-provider-a"
-
-
-class FakeRuntime:
-    """Echo agent. 'sleep=N;text' waits N seconds; 'unknown-conversation' raises a caller error."""
-
-    def __init__(self) -> None:
-        self.cancelled = threading.Event()
-
-    async def ask(
-        self,
-        agent_id: str,
-        message: str,
-        image_urls: Sequence[str] = (),
-        conversation_id: str | None = None,
-    ) -> AgentResult:
-        delay = 0.0
-        if message.startswith("sleep="):
-            head, _, message = message.partition(";")
-            delay = float(head.removeprefix("sleep="))
-        try:
-            await asyncio.sleep(delay)
-        except asyncio.CancelledError:
-            self.cancelled.set()
-            raise
-        if message == "unknown-conversation":
-            raise UnknownConversationError(f"Conversation not found or expired: {conversation_id}")
-        return AgentResult(conversation_id or "conv_test", "input_required", f"echo: {message}", 42)
-
-
-@contextmanager
-def running_server(app):
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-    server = uvicorn.Server(
-        uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", timeout_graceful_shutdown=1)
-    )
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    deadline = time.monotonic() + 10
-    while not server.started:
-        if time.monotonic() > deadline:
-            raise RuntimeError("server did not start")
-        time.sleep(0.05)
-    try:
-        yield f"http://127.0.0.1:{port}/mcp"
-    finally:
-        server.should_exit = True
-        thread.join(timeout=10)
-
-
-@pytest.fixture
-def start_server():
-    with ExitStack() as stack:
-
-        def start(**overrides):
-            runtime = FakeRuntime()
-            app = build_app(provider_id="provider-a", api_key=KEY, runtime=runtime, **overrides)
-            return stack.enter_context(running_server(app)), runtime
-
-        yield start
+from tests.helpers import TEST_API_KEY as KEY
 
 
 def test_requests_without_a_valid_key_are_rejected(start_server):
@@ -264,3 +194,24 @@ def test_tasks_are_forgotten_after_their_ttl(start_server):
         resp = client.get_task(task_id)
 
     assert resp.error["code"] == -32602
+
+
+def test_server_without_tasks_extension_answers_directly(start_server):
+    url, _ = start_server(tasks_enabled=False)
+    with WireClient(url, KEY) as client:
+        capabilities = client.request("server/discover").result["capabilities"]
+        result = client.call_tool("trip_planner", {"message": "hello"}).result
+
+    assert TASKS_EXTENSION not in (capabilities.get("extensions") or {})
+    assert result["resultType"] == "complete"
+    assert result["_meta"]["com.cic/credit_usage"] == 42
+
+
+def test_json_rpc_errors_fail_the_task(start_server):
+    url, _ = start_server(poll_interval_ms=100)
+    with WireClient(url, KEY) as client:
+        task_id = client.call_tool("trip_planner", {"message": "mcp-error"}).result["taskId"]
+        task = wait_for_terminal(client, task_id)
+
+    assert task["status"] == "failed"
+    assert "provider backend unavailable" in task["error"]["message"]

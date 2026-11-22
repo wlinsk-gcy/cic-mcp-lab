@@ -106,13 +106,14 @@ def build_app(
     push_enabled: bool = True,
     ttl_ms: int = 3_600_000,
     poll_interval_ms: int = 2_000,
+    tasks_enabled: bool = True,
 ) -> ASGIApp:
     specs = provider_specs(provider_id)
     store = TaskStore(ttl_ms=ttl_ms, poll_interval_ms=poll_interval_ms, push_enabled=push_enabled)
     mcp = MCPServer(
         f"cic-lab-{provider_id}",
-        extensions=[TasksExtension(store, task_tools=set(specs))],
-        middleware=[TasksListenMiddleware(store)],
+        extensions=[TasksExtension(store, task_tools=set(specs))] if tasks_enabled else [],
+        middleware=[TasksListenMiddleware(store)] if tasks_enabled else [],
         token_verifier=ApiKeyVerifier({api_key: CIC_CALLER_ID}),
         # API-key auth only: AuthSettings requires an issuer URL, which is never contacted.
         auth=AuthSettings(issuer_url="https://auth.invalid", resource_server_url=None),
@@ -136,6 +137,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--delay", type=float, default=0.0, help="每轮调用 Agent 前额外等待的秒数（模拟长任务）")
     parser.add_argument("--no-push", action="store_true", help="不接受 taskIds 订阅（模拟不支持推送的 Provider）")
+    parser.add_argument("--no-tasks", action="store_true", help="不支持 tasks 扩展，直接返回结果（模拟同步 Provider）")
     args = parser.parse_args()
 
     settings = load_settings()
@@ -156,6 +158,7 @@ def main() -> None:
         push_enabled=not args.no_push,
         ttl_ms=int(os.environ.get("PROVIDER_TASK_TTL_MS", "3600000")),
         poll_interval_ms=int(os.environ.get("PROVIDER_POLL_INTERVAL_MS", "2000")),
+        tasks_enabled=not args.no_tasks,
     )
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     # listen streams stay open until the client leaves; don't let them block shutdown
