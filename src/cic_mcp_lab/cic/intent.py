@@ -1,7 +1,7 @@
 """Intent recognition (design §6.3): one structured LLM decision per user input."""
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -76,3 +76,29 @@ def build_intent_prompt(session: Session, text: str, image_count: int = 0) -> st
     parts = [f"## {title}\n" + ("\n".join(lines) if lines else "（无）") for title, lines in sections]
     parts.append(f"## 本次输入\n{text}{attachment}")
     return "\n\n".join(parts)
+
+
+class IntentError(RuntimeError):
+    """The model returned no structured decision."""
+
+
+class LlmIntentRecognizer:
+    def __init__(self, client: Any, model: str) -> None:
+        self._client = client  # openai.AsyncOpenAI pointed at Bailian's compatible-mode endpoint
+        self._model = model
+
+    async def recognize(self, session: Session, text: str, image_count: int = 0) -> IntentDecision:
+        completion = await self._client.chat.completions.parse(
+            model=self._model,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": build_intent_prompt(session, text, image_count)},
+            ],
+            response_format=IntentDecision,
+            temperature=0,
+            extra_body={"enable_thinking": False},
+        )
+        message = completion.choices[0].message
+        if message.parsed is None:
+            raise IntentError(f"Intent recognition returned no decision: {message.refusal or 'empty output'}")
+        return message.parsed
