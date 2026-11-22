@@ -60,8 +60,8 @@ async def _call(args: argparse.Namespace) -> bool:
 
     for note in outcome.notes:
         print(f"[note] {note}")
-    via = DELIVERY_LABELS.get(outcome.delivery or "", "未拿到最终状态")
-    print(f"[result] 经{via} · 从提交起 {outcome.elapsed_seconds:.1f}s")
+    via = DELIVERY_LABELS.get(outcome.delivery or "")
+    print(f"[result] {f'经{via}' if via else '未拿到最终状态'} · 从提交起 {outcome.elapsed_seconds:.1f}s")
     if not outcome.ok:
         print(f"[failed] {outcome.failure}: {outcome.detail}（不计费）")
         return False
