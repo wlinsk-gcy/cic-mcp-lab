@@ -158,4 +158,5 @@ def main() -> None:
         poll_interval_ms=int(os.environ.get("PROVIDER_POLL_INTERVAL_MS", "2000")),
     )
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="info")
+    # listen streams stay open until the client leaves; don't let them block shutdown
+    uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="info", timeout_graceful_shutdown=3)

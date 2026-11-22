@@ -83,6 +83,7 @@ def _run(args: argparse.Namespace, api_key: str) -> bool:
 
 
 def main() -> None:
+    sys.stdout.reconfigure(encoding="utf-8")  # agent replies may contain emoji; gbk pipes would crash
     parser = argparse.ArgumentParser(description="在协议层面检查一个 Provider MCP Server")
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--key-env", required=True, help="保存 API Key 的环境变量名，如 PROVIDER_A_API_KEY")

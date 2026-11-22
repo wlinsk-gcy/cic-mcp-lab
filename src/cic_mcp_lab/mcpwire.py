@@ -37,7 +37,8 @@ class WireClient:
         self._url = url
         self._api_key = api_key
         # The server pings listen streams every 15 s, so the read timeout must be well above that.
-        self._http = httpx.Client(timeout=httpx.Timeout(30.0, read=300.0))
+        # This client only talks to local lab servers, so ignore system proxies (trust_env=False).
+        self._http = httpx.Client(timeout=httpx.Timeout(30.0, read=300.0), trust_env=False)
         self._ids = itertools.count(1)
 
     def __enter__(self) -> WireClient:
