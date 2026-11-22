@@ -52,6 +52,7 @@ def test_best_threshold_maximises_intercepted_minus_wrongly_intercepted():
 def test_score_separation_and_latency():
     gap = separation(RESULTS)
 
-    assert (gap.expected_min, gap.expected_mean, gap.none_max) == (0.8, 0.8, 0.45)
+    # the expected agent's own score on every query that has one, whatever its rank (0.8 and 0.6; one not ranked)
+    assert (gap.expected_min, gap.expected_mean, gap.none_max) == (0.6, pytest.approx(0.7), 0.45)
     assert gap.none_mean == pytest.approx(0.325)
     assert latency(RESULTS) == (pytest.approx(14.0), 30.0)

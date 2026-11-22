@@ -63,6 +63,10 @@ class Scored:
                 return position
         return None
 
+    def expected_score(self) -> float | None:
+        """The expected agent's own score, whatever its rank; None when it was not ranked."""
+        return next((score for agent_id, score in self.ranking if agent_id == self.item.expect), None)
+
 
 @dataclass(frozen=True)
 class Accuracy:
@@ -81,7 +85,7 @@ class ThresholdStats:
 
 @dataclass(frozen=True)
 class Separation:
-    expected_min: float | None  # lowest / mean score of the expected agent where it ranked first
+    expected_min: float | None  # lowest / mean score of the expected agent on every query that has one, any rank
     expected_mean: float | None
     none_max: float | None  # highest / mean best score among no-fit queries
     none_mean: float | None
@@ -141,7 +145,8 @@ def best_threshold(results: Sequence[Scored]) -> ThresholdStats:
 
 
 def separation(results: Sequence[Scored]) -> Separation:
-    expected = [result.top_score for result in _positives(results) if result.rank_of_expected() == 1]
+    # Every query with an expected agent counts, so all variants are compared on the same queries.
+    expected = [score for result in _positives(results) if (score := result.expected_score()) is not None]
     no_fit = [result.top_score for result in _no_fit(results)]
     return Separation(
         min(expected) if expected else None,
