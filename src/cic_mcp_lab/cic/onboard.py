@@ -12,6 +12,7 @@ from typing import Literal
 from ..config import Settings, load_settings
 from .probe import ProbeReport, probe
 from .recommend.embedding import Embedder, make_embedder
+from .recommend.profile import profile_text
 from .recommend.vector_store import AgentPoint, Kind, QdrantVectorStore
 from .registry import AgentRecord, RegistryError, api_key_for, load_registry
 
@@ -26,18 +27,6 @@ class OnboardResult:
     action: Action
     points: int
     detail: str
-
-
-def profile_text(record: AgentRecord) -> str:
-    """One paragraph per agent from the Portal's basic fields (design §4.5)."""
-    return "\n".join(
-        [
-            f"名称：{record.display_name}",
-            f"分类：{', '.join(record.category)}",
-            f"标签：{', '.join(record.tags)}",
-            f"描述：{record.description}",
-        ]
-    )
 
 
 async def onboard(
