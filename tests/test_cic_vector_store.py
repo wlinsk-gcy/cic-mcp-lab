@@ -45,6 +45,13 @@ def test_agent_search_returns_each_agents_best_point_up_to_the_limit(store):
     assert [hit.agent_id for hit in store.search_agents([1, 0, 0], 5, callable_only=False, require_image=True)] == ["poster"]
 
 
+def test_agent_search_can_be_limited_to_profiles(store):
+    assert store.search_agents([0.9, 0.1, 0], 5)[0].kind == "example"
+    [hit] = store.search_agents([0.9, 0.1, 0], 5, kinds=("profile",))
+
+    assert (hit.agent_id, hit.kind, hit.text) == ("trip", "profile", "旅行规划")
+
+
 def test_reonboarding_replaces_every_point_of_the_agent(store):
     store.replace_agent("trip", [point("trip", "profile", "旅行规划 v2", [1, 0, 0])])
 

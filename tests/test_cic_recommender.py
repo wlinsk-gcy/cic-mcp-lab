@@ -89,3 +89,37 @@ async def test_registry_is_rechecked_because_the_index_can_lag(store):
     del delisted["report"]
 
     assert ids(await recommender(store, [1, 0, 0], delisted, top_k=4).recommend("q")) == ["copy"]
+
+
+class FakeReranker:
+    """Scores a document by the agent name in it (the test records' display names are upper-cased ids)."""
+
+    def __init__(self, scores):
+        self.scores = scores
+        self.queries = []
+
+    async def rerank(self, query, documents):
+        self.queries.append(query)
+        return [next(score for name, score in self.scores.items() if f"名称：{name}\n" in doc) for doc in documents]
+
+
+async def test_rank_keeps_every_candidate_for_the_evaluation(store):
+    ranked = await recommender(store, [1, 0, 0], top_k=1, min_score=0.9).rank("q")
+
+    assert ids(ranked) == ["trip", "copy", "report"]
+
+
+async def test_profile_only_variant_ignores_example_questions(store):
+    best = (await recommender(store, [0.95, 0.05, 0], kinds=("profile",)).rank("q"))[0]
+
+    assert (best.agent_id, best.matched_kind) == ("trip", "profile")
+    assert best.score == pytest.approx(0.9986, abs=1e-3)
+
+
+async def test_reranker_reorders_and_the_threshold_applies_to_its_score(store):
+    reranker = FakeReranker({"TRIP": 0.5, "COPY": 0.1, "REPORT": 0.9})
+    recs = await recommender(store, [1, 0, 0], top_k=3, min_score=0.3, reranker=reranker).recommend("北海道")
+
+    assert ids(recs) == ["report", "trip"]
+    assert (recs[0].rerank_score, round(recs[0].dense_score, 2)) == (0.9, 0.29)
+    assert reranker.queries == ["北海道"]

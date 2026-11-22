@@ -16,6 +16,7 @@ from qdrant_client.models import (
     FieldCondition,
     Filter,
     FilterSelector,
+    MatchAny,
     MatchValue,
     PointStruct,
     ScoredPoint,
@@ -54,12 +55,14 @@ def _agent(agent_id: str) -> Filter:
     return Filter(must=[_match("agent_id", agent_id)])
 
 
-def _searchable(callable_only: bool, require_image: bool) -> Filter:
+def _searchable(callable_only: bool, require_image: bool, kinds: Sequence[Kind] | None = None) -> Filter:
     must = [_match("status", "published")]
     if callable_only:
         must.append(_match("callable", True))
     if require_image:
         must.append(_match("supports_image", True))
+    if kinds:
+        must.append(FieldCondition(key="kind", match=MatchAny(any=list(kinds))))
     return Filter(must=must)
 
 
@@ -167,15 +170,19 @@ class QdrantVectorStore:
         *,
         callable_only: bool = True,
         require_image: bool = False,
+        kinds: Sequence[Kind] | None = None,
     ) -> list[SearchHit]:
-        """Each agent's single best point, best agents first, for up to `top_agents` agents."""
+        """Each agent's single best point, best agents first, for up to `top_agents` agents.
+
+        `kinds=("profile",)` looks at profiles only: recommendation as if the example questions were deleted (V1).
+        """
         result = self._client.query_points_groups(
             COLLECTION,
             query=list(vector),
             group_by="agent_id",
             group_size=1,
             limit=top_agents,
-            query_filter=_searchable(callable_only, require_image),
+            query_filter=_searchable(callable_only, require_image, kinds),
             with_payload=True,
         )
         return [_hit(group.hits[0]) for group in result.groups if group.hits and group.hits[0].payload]
