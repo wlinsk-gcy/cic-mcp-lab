@@ -1,10 +1,20 @@
-# Agents CIC has onboarded through the Provider Portal (simulated).
-# API keys live in .env; only the variable name is stored here.
+# Agents CIC has onboarded through the Provider Portal (simulated; production keeps them in a database, design §13.10).
+# - Callable agents have mcp_url / api_key_env / entry_tool. API keys live in .env; only the variable name is here.
+# - Mock agents have no MCP endpoint: they only exist so recommendation has look-alike agents to tell apart (design §7).
+# - status: published | delisted. Editing it simulates the operations console; run cic-onboard to sync the index.
+# - supports_image is read for mock agents only; a callable agent's entry tool schema decides (design §4.5).
 agents:
   - agent_id: trip_planner
     provider_id: provider-a
     display_name: 旅行规划
     description: 根据目的地、出行日期和预算，为用户规划逐日旅行行程。
+    category: [出行, 生活服务]
+    tags: [行程规划, 自由行, 预算]
+    examples:
+      - 帮我规划一个 5 天的日本自由行
+      - 国庆想去云南玩一周，路线怎么安排
+      - 预算 8000 元带父母去成都玩 4 天，帮我排一下行程
+      - 第一次去欧洲，两周时间怎么规划比较好
     mcp_url: "http://127.0.0.1:8001/mcp"
     api_key_env: PROVIDER_A_API_KEY
     entry_tool: trip_planner
@@ -13,6 +23,13 @@ agents:
     provider_id: provider-a
     display_name: 商品文案
     description: 根据商品图片和描述，为电商平台撰写营销文案。
+    category: [电商, 营销]
+    tags: [商品文案, 种草, 卖点提炼]
+    examples:
+      - 帮这款保温杯写一段淘宝详情页文案
+      - 根据商品图片写一条小红书种草笔记
+      - 给新款运动鞋提炼 5 个卖点
+      - 帮我写一段抖音橱窗的商品介绍
     mcp_url: "http://127.0.0.1:8001/mcp"
     api_key_env: PROVIDER_A_API_KEY
     entry_tool: product_copy
@@ -21,7 +38,150 @@ agents:
     provider_id: provider-b
     display_name: 周报撰写
     description: 根据本周工作内容，生成结构化的工作周报。
+    category: [办公, 写作]
+    tags: [周报, 工作总结, 汇报]
+    examples:
+      - 帮我把这周做的事整理成周报
+      - 根据我列的工作要点生成一份结构化周报
+      - 本周完成了需求评审和两个接口开发，帮我写周报
+      - 写一份给领导看的本周工作总结
     mcp_url: "http://127.0.0.1:8002/mcp"
     api_key_env: PROVIDER_B_API_KEY
     entry_tool: weekly_report
+    price_per_credit: 0.0001
+
+  # ---- Mock agents (profile only, no MCP endpoint) ----
+  - agent_id: hotel_booking
+    provider_id: provider-mock
+    display_name: 酒店推荐
+    description: 按城市、商圈、预算和出行人群推荐合适的酒店，并对比价格与评价。
+    category: [出行, 生活服务]
+    tags: [酒店, 住宿, 比价]
+    examples:
+      - 东京新宿附近有什么性价比高的酒店
+      - 帮我找三亚适合带小孩住的海边酒店
+      - 下周去上海出差，推荐交通方便的商务酒店
+    price_per_credit: 0.0001
+  - agent_id: visa_consult
+    provider_id: provider-mock
+    display_name: 签证咨询
+    description: 解答各国旅游、商务、留学签证的办理条件、材料清单和办理周期。
+    category: [出行, 政务]
+    tags: [签证, 材料清单, 出入境]
+    examples:
+      - 申请日本旅游签证需要准备哪些材料
+      - 申根签证一般要提前多久办理
+      - 自由职业者怎么申请美国签证
+    price_per_credit: 0.0001
+  - agent_id: flight_deals
+    provider_id: provider-mock
+    display_name: 机票比价
+    description: 比较不同日期和航司的机票价格，帮用户找到便宜或合适的航班。
+    category: [出行]
+    tags: [机票, 特价, 航班]
+    examples:
+      - 下个月北京飞大阪哪天最便宜
+      - 广州到伦敦有没有直飞航班
+      - 春节回家的机票怎么买比较划算
+    price_per_credit: 0.0001
+  - agent_id: meeting_minutes
+    provider_id: provider-mock
+    display_name: 会议纪要
+    description: 把会议记录或录音转写整理成会议纪要，提炼决议和待办事项。
+    category: [办公, 写作]
+    tags: [会议记录, 待办事项, 决议]
+    examples:
+      - 把这段会议录音的文字整理成会议纪要
+      - 根据讨论内容列出会议决议和待办
+      - 帮我把今天项目例会的要点整理一下
+    price_per_credit: 0.0001
+  - agent_id: email_writer
+    provider_id: provider-mock
+    display_name: 邮件写作
+    description: 撰写和回复中英文商务邮件，语气得体、结构清晰。
+    category: [办公, 写作]
+    tags: [商务邮件, 英文邮件, 邮件回复]
+    examples:
+      - 帮我写一封催客户付款的邮件
+      - 用英文回复供应商的询价
+      - 写一封请假邮件给主管
+    price_per_credit: 0.0001
+  - agent_id: ppt_outline
+    provider_id: provider-mock
+    display_name: PPT 大纲
+    description: 根据主题或材料生成演示文稿的结构大纲和每页要点。
+    category: [办公]
+    tags: [演示文稿, 大纲, 汇报]
+    examples:
+      - 帮我列一个年度总结汇报的 PPT 大纲
+      - 产品发布会的演示文稿应该包含哪些页
+      - 把这份方案整理成 10 页 PPT 的结构
+    price_per_credit: 0.0001
+  - agent_id: poster_design
+    provider_id: provider-mock
+    display_name: 海报设计
+    description: 根据活动主题或商品图片生成宣传海报的设计方案与视觉稿。
+    category: [电商, 设计]
+    tags: [海报, 主视觉, 促销图]
+    examples:
+      - 给双十一大促设计一张主视觉海报
+      - 根据这张产品图做一张宣传海报
+      - 设计一张新品上市的朋友圈海报
+    supports_image: true
+    price_per_credit: 0.0001
+  - agent_id: product_cutout
+    provider_id: provider-mock
+    display_name: 商品抠图
+    description: 去除商品图片背景，生成白底图或透明底图，适用于电商主图。
+    category: [电商, 设计]
+    tags: [抠图, 白底图, 图片处理]
+    examples:
+      - 把这张商品图的背景去掉换成白底
+      - 帮我把模特图里的衣服单独抠出来
+      - 批量处理商品主图的背景
+    supports_image: true
+    price_per_credit: 0.0001
+  - agent_id: livestream_script
+    provider_id: provider-mock
+    display_name: 直播话术
+    description: 为直播带货撰写开场、讲品、促单等环节的话术与脚本。
+    category: [电商, 营销]
+    tags: [直播带货, 话术, 脚本]
+    examples:
+      - 帮我写一段直播间卖面膜的话术
+      - 直播开场怎么暖场留人
+      - 给零食专场写一份直播脚本
+    price_per_credit: 0.0001
+  - agent_id: legal_consult
+    provider_id: provider-mock
+    display_name: 法律咨询
+    description: 解答劳动、租房、合同、消费维权等常见法律问题，给出处理建议。
+    category: [法律, 生活服务]
+    tags: [劳动纠纷, 合同, 维权]
+    examples:
+      - 公司拖欠工资应该怎么维权
+      - 租房到期房东不退押金怎么办
+      - 签劳动合同要注意哪些条款
+    price_per_credit: 0.0001
+  - agent_id: fitness_coach
+    provider_id: provider-mock
+    display_name: 健身计划
+    description: 根据身体情况和目标制定减脂、增肌等训练与饮食计划。
+    category: [健康, 运动]
+    tags: [减脂, 增肌, 训练计划]
+    examples:
+      - 帮我制定一个三个月的减脂计划
+      - 新手在家没有器械怎么练
+      - 增肌期间一天应该吃多少蛋白质
+    price_per_credit: 0.0001
+  - agent_id: recipe_helper
+    provider_id: provider-mock
+    display_name: 家常菜谱
+    description: 根据现有食材、口味和人数推荐家常菜做法与搭配。
+    category: [美食, 生活服务]
+    tags: [菜谱, 做饭, 营养搭配]
+    examples:
+      - 冰箱里有鸡蛋、番茄和土豆，能做什么菜
+      - 红烧肉怎么做才不腻
+      - 给一家三口安排一周的晚餐
     price_per_credit: 0.0001
