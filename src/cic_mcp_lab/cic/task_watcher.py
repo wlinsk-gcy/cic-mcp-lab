@@ -342,7 +342,12 @@ class TaskWatcher:
             _check_deadline(deadline)
 
     async def _poll(
-        self, client: ProviderClient, task_id: str, deadline: float | None, interval: float
+        self,
+        client: ProviderClient,
+        task_id: str,
+        deadline: float | None,
+        interval: float,
+        on_success: Callable[[], None] | None = None,
     ) -> TaskSnapshot:
         errors = 0
         while True:
@@ -356,6 +361,8 @@ class TaskWatcher:
                     raise _TaskGone("lost", f"tasks/get failed {errors} times: {describe_error(exc)}") from exc
             else:
                 errors = 0
+                if on_success is not None:
+                    on_success()
                 if snapshot.status in TERMINAL_STATUSES:
                     return snapshot
                 _check_deadline(deadline)
@@ -366,12 +373,17 @@ class TaskWatcher:
     ) -> TaskSnapshot:
         """Poll over fresh connections after the watch connection broke; MAX_POLL_ERRORS failures in a row → lost."""
         errors = 1  # the failure that brought us here
+
+        def recovered() -> None:
+            nonlocal errors
+            errors = 0
+
         while True:
             _check_deadline(deadline)
             await anyio.sleep(_remaining(interval, deadline))
             try:
                 async with self._client_factory(record.mcp_url, api_key) as client:
-                    return await self._poll(client, task_id, deadline, interval)
+                    return await self._poll(client, task_id, deadline, interval, on_success=recovered)
             except _TaskGone:
                 raise
             except Exception as exc:

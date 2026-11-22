@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 from decimal import Decimal
 
@@ -253,3 +254,37 @@ async def test_watch_reconnects_and_polls_after_the_connection_breaks(reconnects
 
     assert outcome.failure == failure
     assert any("reconnecting" in note for note in outcome.notes)
+
+
+class DroppingClient(ScriptedClient):
+    """One good poll, then the connection drops: the SDK cancels the call and the client exit raises."""
+
+    def __init__(self):
+        super().__init__(["working"])
+        self._polls = 0
+
+    async def get_task(self, task_id):
+        self._polls += 1
+        if self._polls > 1:
+            raise asyncio.CancelledError()  # what the SDK's transport scope does to the in-flight request
+        return await super().get_task(task_id)
+
+    async def __aexit__(self, exc_type, *exc_info):
+        if exc_type is asyncio.CancelledError:
+            raise ConnectionResetError("connection dropped")
+
+
+async def test_reconnect_failures_are_counted_consecutively():
+    clients = iter([DroppedPushClient(["working"]), DroppingClient(), DroppingClient(), ScriptedClient(["completed"])])
+    watcher = TaskWatcher(
+        {"trip_planner": record_for("http://scripted/mcp")},
+        Ledger(),
+        env=ENV,
+        client_factory=lambda url, key: next(clients, Unreachable()),
+        backstop_poll_seconds=0.05,
+    )
+    async with watcher:
+        await watcher.submit("trip_planner", "hi")
+        outcome = await next_outcome(watcher)
+
+    assert (outcome.ok, outcome.delivery) == (True, "poll")
