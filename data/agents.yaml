@@ -1,0 +1,27 @@
+# Agents CIC has onboarded through the Provider Portal (simulated).
+# API keys live in .env; only the variable name is stored here.
+agents:
+  - agent_id: trip_planner
+    provider_id: provider-a
+    display_name: 旅行规划
+    description: 根据目的地、出行日期和预算，为用户规划逐日旅行行程。
+    mcp_url: "http://127.0.0.1:8001/mcp"
+    api_key_env: PROVIDER_A_API_KEY
+    entry_tool: trip_planner
+    price_per_credit: 0.0001
+  - agent_id: product_copy
+    provider_id: provider-a
+    display_name: 商品文案
+    description: 根据商品图片和描述，为电商平台撰写营销文案。
+    mcp_url: "http://127.0.0.1:8001/mcp"
+    api_key_env: PROVIDER_A_API_KEY
+    entry_tool: product_copy
+    price_per_credit: 0.0001
+  - agent_id: weekly_report
+    provider_id: provider-b
+    display_name: 周报撰写
+    description: 根据本周工作内容，生成结构化的工作周报。
+    mcp_url: "http://127.0.0.1:8002/mcp"
+    api_key_env: PROVIDER_B_API_KEY
+    entry_tool: weekly_report
+    price_per_credit: 0.0001
