@@ -78,6 +78,12 @@ async def test_threshold_and_top_k(store):
     assert ids(recs) == ["trip"]
 
 
+async def test_excluded_agents_are_left_out_before_top_k(store):
+    recs = await recommender(store, [1, 0, 0], top_k=2).recommend("q", exclude=("trip",))
+
+    assert ids(recs) == ["copy", "report"]
+
+
 async def test_recall_counts_agents_not_points(store):
     recs = await recommender(store, [1, 0, 0], recall_top_n=2, top_k=2).recommend("q")
 

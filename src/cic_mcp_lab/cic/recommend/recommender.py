@@ -1,7 +1,7 @@
 """Recommender: recall agents by vector, re-check the registry, optional rerank, threshold, top_k (design §6.4)."""
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, replace
 
 from ..registry import AgentRecord
@@ -51,9 +51,15 @@ class Recommender:
         self._kinds = kinds
 
     async def recommend(
-        self, query: str, *, with_image: bool = False, include_mock: bool = False
+        self,
+        query: str,
+        *,
+        with_image: bool = False,
+        include_mock: bool = False,
+        exclude: Collection[str] = (),
     ) -> list[Recommendation]:
-        picks = await self.rank(query, with_image=with_image, include_mock=include_mock)
+        ranked = await self.rank(query, with_image=with_image, include_mock=include_mock)
+        picks = [pick for pick in ranked if pick.agent_id not in exclude]  # e.g. the agent that just failed
         if self._min_score is not None:
             picks = [pick for pick in picks if pick.score >= self._min_score]
         return picks[: self._top_k]
