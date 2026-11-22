@@ -95,14 +95,17 @@ class Router:
 
     async def handle(self, text: str, image_urls: Sequence[str] = ()) -> None:
         images = tuple(image_urls)
+        seen = self.session.pending  # the choice the user was looking at when they typed
         decision = await self._recognizer.recognize(self.session, text, len(images))
         self._emit("intent", describe(decision))
         suffix = f"（附带 {len(images)} 张图片）" if images else ""
         self.session.history.append(Turn("user", text + suffix))
-        # Any input other than a choice drops the pending choice (design §6.2 rule 3).
-        pending, self.session.pending = self.session.pending, None
+        # Any input other than a choice drops the pending choice (design §6.2 rule 3) — unless a failure
+        # posted a newer choice while the input was being recognised; that one stays for the next turn.
+        if self.session.pending is seen:
+            self.session.pending = None
         if decision.intent == "select_candidate":
-            await self._select(pending, decision.candidate_index)
+            await self._select(seen, decision.candidate_index)
         elif decision.intent == "supplement":
             await self._supplement(decision.thread_ref, text, images)
         elif decision.intent == "recommend":
@@ -138,7 +141,8 @@ class Router:
 
     async def _select(self, pending: Pending | None, index: int | None) -> None:
         if pending is None or index is None or not 1 <= index <= _option_count(pending):
-            self.session.pending = pending  # keep the choice open
+            if self.session.pending is None:
+                self.session.pending = pending  # keep the choice open (unless a newer one has appeared)
             await self._answer("用户像是在做选择，但当前没有待选项或编号超出范围。请提示用户按编号从当前待选项中选择，或直接说明新的需求。")
             return
         if isinstance(pending, PendingCandidates):

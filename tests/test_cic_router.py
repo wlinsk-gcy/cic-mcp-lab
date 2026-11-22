@@ -204,3 +204,21 @@ def test_outcomes_after_a_reset_are_reported_but_not_attached():
 
     assert "不属于当前会话" in h.texts("notice")[0]
     assert h.router.session.pending is None
+
+
+async def test_a_failure_arriving_during_recognition_neither_hijacks_nor_drops_choices():
+    h = Harness(TRIP, COPY)
+    await h.say("帮我规划东京旅行", decide("recommend"))
+    await h.say("1", decide("select_candidate", candidate_index=1))  # T1 running as sub_1
+    await h.say("另外帮这个商品写文案", decide("recommend"))  # a new candidate list is shown
+    read_input = h.recognizer.recognize
+
+    async def failure_meanwhile(session, text, image_count=0):
+        h.fail("sub_1", "trip_planner")  # T1 fails while the LLM is still reading "第二个"
+        return await read_input(session, text, image_count)
+
+    h.recognizer.recognize = failure_meanwhile
+    await h.say("第二个", decide("select_candidate", candidate_index=2))
+
+    assert h.submitter.calls[-1] == ("product_copy", "另外帮这个商品写文案", (), None)
+    assert h.router.session.pending == PendingRetry("T1", "帮我规划东京旅行", ())
