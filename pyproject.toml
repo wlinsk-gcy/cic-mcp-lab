@@ -25,6 +25,7 @@ provider-check = "cic_mcp_lab.provider.check:main"
 cic-probe = "cic_mcp_lab.cic.probe:main"
 cic-call = "cic_mcp_lab.cic.call:main"
 cic-onboard = "cic_mcp_lab.cic.onboard:main"
+cic-recommend = "cic_mcp_lab.cic.recommend.cli:main"
 
 [build-system]
 requires = ["uv_build>=0.11.14,<0.12.0"]
