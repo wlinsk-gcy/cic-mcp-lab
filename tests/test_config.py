@@ -72,3 +72,30 @@ def test_recommendation_settings_are_parsed():
 def test_malformed_recommendation_settings_are_reported(name, value):
     with pytest.raises(ConfigError, match=name):
         load_settings({**BASE_ENV, name: value})
+
+
+def test_rerank_settings_have_defaults():
+    settings = load_settings(BASE_ENV)
+
+    assert (settings.rerank_model, settings.rerank_enabled, settings.recommend_min_score_rerank) == (
+        "qwen3-rerank",
+        False,
+        None,
+    )
+
+
+def test_rerank_settings_are_parsed():
+    settings = load_settings(
+        {**BASE_ENV, "RERANK_MODEL": "qwen3.7-text-rerank", "RERANK_ENABLED": "True", "RECOMMEND_MIN_SCORE_RERANK": "0.4"}
+    )
+
+    assert (settings.rerank_model, settings.rerank_enabled, settings.recommend_min_score_rerank) == (
+        "qwen3.7-text-rerank",
+        True,
+        0.4,
+    )
+
+
+def test_malformed_rerank_switch_is_reported():
+    with pytest.raises(ConfigError, match="RERANK_ENABLED"):
+        load_settings({**BASE_ENV, "RERANK_ENABLED": "maybe"})

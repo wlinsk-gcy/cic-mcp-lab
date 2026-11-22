@@ -18,6 +18,15 @@ class ConfigError(RuntimeError):
     """Raised when required settings are missing or invalid."""
 
 
+def boolean(raw: str) -> bool:
+    value = raw.strip().lower()
+    if value in {"true", "1", "yes", "on"}:
+        return True
+    if value in {"false", "0", "no", "off"}:
+        return False
+    raise ValueError(raw)
+
+
 @dataclass(frozen=True)
 class Settings:
     dashscope_base_url: str
@@ -35,6 +44,9 @@ class Settings:
     recall_top_n: int = 20  # agents (not points) recalled per query
     recommend_top_k: int = 2
     recommend_min_score_dense: float | None = None  # chosen by the step 5 evaluation; unset = no threshold
+    rerank_model: str = "qwen3-rerank"
+    rerank_enabled: bool = False
+    recommend_min_score_rerank: float | None = None  # chosen by the step 5 evaluation; unset = no threshold
 
 
 _REQUIRED = (
@@ -97,4 +109,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         recall_top_n=optional("RECALL_TOP_N", int, 20),
         recommend_top_k=optional("RECOMMEND_TOP_K", int, 2),
         recommend_min_score_dense=optional("RECOMMEND_MIN_SCORE_DENSE", float, None),
+        rerank_model=env.get("RERANK_MODEL", "").strip() or "qwen3-rerank",
+        rerank_enabled=optional("RERANK_ENABLED", boolean, False),
+        recommend_min_score_rerank=optional("RECOMMEND_MIN_SCORE_RERANK", float, None),
     )
