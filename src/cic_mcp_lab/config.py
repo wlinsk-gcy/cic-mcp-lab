@@ -28,9 +28,18 @@ def boolean(raw: str) -> bool:
 
 
 @dataclass(frozen=True)
-class Settings:
+class DashScopeSettings:
     dashscope_base_url: str
     dashscope_api_key: str = field(repr=False)
+
+
+@dataclass(frozen=True)
+class ProviderSettings(DashScopeSettings):
+    provider_model: str
+
+
+@dataclass(frozen=True)
+class Settings(DashScopeSettings):
     router_model: str
     provider_model: str
     embedding_model: str
@@ -62,6 +71,22 @@ _REQUIRED = (
     "OSS_ACCESS_KEY_ID",
     "OSS_ACCESS_KEY_SECRET",
 )
+
+
+def load_provider_settings(env: Mapping[str, str] | None = None) -> ProviderSettings:
+    """Load the model settings required by a standalone Provider server."""
+    if env is None:
+        load_dotenv(PROJECT_ROOT / ".env")
+        env = os.environ
+    required = ("DASHSCOPE_BASE_URL", "DASHSCOPE_API_KEY", "PROVIDER_MODEL")
+    missing = [name for name in required if not env.get(name, "").strip()]
+    if missing:
+        raise ConfigError(f"Missing provider settings: {', '.join(missing)}")
+    return ProviderSettings(
+        dashscope_base_url=env["DASHSCOPE_BASE_URL"].strip(),
+        dashscope_api_key=env["DASHSCOPE_API_KEY"].strip(),
+        provider_model=env["PROVIDER_MODEL"].strip(),
+    )
 
 
 def load_settings(env: Mapping[str, str] | None = None) -> Settings:

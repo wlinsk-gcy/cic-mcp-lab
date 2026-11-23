@@ -1,0 +1,30 @@
+x-provider: &provider
+  build: .
+  restart: unless-stopped
+  init: true
+  env_file: .env.provider
+
+x-healthcheck: &healthcheck
+  interval: 30s
+  timeout: 8s
+  start_period: 20s
+  retries: 3
+
+services:
+  provider-a:
+    <<: *provider
+    profiles: [provider-a]
+    command: ["--provider", "A", "--port", "8881", "--public-ip", "192.168.218.99"]
+    ports: ["192.168.218.99:8881:8881"]
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "python", "/app/check_provider.py", "A", "http://127.0.0.1:8881/mcp"]
+
+  provider-b:
+    <<: *provider
+    profiles: [provider-b]
+    command: ["--provider", "B", "--port", "8882", "--public-ip", "192.168.218.91", "--no-push"]
+    ports: ["192.168.218.91:8882:8882"]
+    healthcheck:
+      <<: *healthcheck
+      test: ["CMD", "python", "/app/check_provider.py", "B", "http://127.0.0.1:8882/mcp"]

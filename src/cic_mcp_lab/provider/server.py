@@ -6,17 +6,19 @@ import asyncio
 import logging
 import os
 from collections.abc import Sequence
+from ipaddress import IPv4Address
 from typing import Annotated, Any, Protocol
 
 import uvicorn
 from mcp.server.auth.settings import AuthSettings
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp_types import CallToolResult, TextContent
 from pydantic import Field
 from starlette.types import ASGIApp
 
-from ..config import load_settings
+from ..config import load_provider_settings
 from ..llm import make_chat_model
 from .agent import (
     AgentResult,
@@ -107,6 +109,7 @@ def build_app(
     ttl_ms: int = 3_600_000,
     poll_interval_ms: int = 2_000,
     tasks_enabled: bool = True,
+    transport_security: TransportSecuritySettings | None = None,
 ) -> ASGIApp:
     specs = provider_specs(provider_id)
     store = TaskStore(ttl_ms=ttl_ms, poll_interval_ms=poll_interval_ms, push_enabled=push_enabled)
@@ -125,7 +128,7 @@ def build_app(
             title=spec.display_name,
             description=spec.description,
         )
-    return mcp.streamable_http_app(host="127.0.0.1")
+    return mcp.streamable_http_app(host="127.0.0.1", transport_security=transport_security)
 
 
 _API_KEY_ENV = {"A": "PROVIDER_A_API_KEY", "B": "PROVIDER_B_API_KEY"}
@@ -135,21 +138,32 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="启动模拟 Provider 的 MCP Server")
     parser.add_argument("--provider", choices=sorted(_API_KEY_ENV), required=True)
     parser.add_argument("--port", type=int, required=True)
+    parser.add_argument("--public-ip", type=IPv4Address, help="监听容器网卡，并允许此宿主机内网 IPv4 地址访问 MCP")
     parser.add_argument("--delay", type=float, default=0.0, help="每轮调用 Agent 前额外等待的秒数（模拟长任务）")
     parser.add_argument("--no-push", action="store_true", help="不接受 taskIds 订阅（模拟不支持推送的 Provider）")
     parser.add_argument("--no-tasks", action="store_true", help="不支持 tasks 扩展，直接返回结果（模拟同步 Provider）")
     args = parser.parse_args()
 
-    settings = load_settings()
+    settings = load_provider_settings()
     key_env = _API_KEY_ENV[args.provider]
     api_key = os.environ.get(key_env, "").strip()
     if not api_key:
-        raise SystemExit(f"Missing {key_env} in .env")
+        raise SystemExit(f"Missing {key_env}")
     provider_id = f"provider-{args.provider.lower()}"
     runtime = ProviderAgentRuntime(
         provider_specs(provider_id),
         make_agent_factory(make_chat_model(settings, settings.provider_model)),
     )
+    bind_host = "127.0.0.1"
+    security = None
+    if args.public_ip is not None:
+        bind_host = "0.0.0.0"
+        hosts = [f"{host}:{args.port}" for host in (args.public_ip, "127.0.0.1", "localhost")]
+        security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=hosts,
+            allowed_origins=[f"http://{host}" for host in hosts],
+        )
     app = build_app(
         provider_id=provider_id,
         api_key=api_key,
@@ -159,7 +173,8 @@ def main() -> None:
         ttl_ms=int(os.environ.get("PROVIDER_TASK_TTL_MS", "3600000")),
         poll_interval_ms=int(os.environ.get("PROVIDER_POLL_INTERVAL_MS", "2000")),
         tasks_enabled=not args.no_tasks,
+        transport_security=security,
     )
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     # listen streams stay open until the client leaves; don't let them block shutdown
-    uvicorn.run(app, host="127.0.0.1", port=args.port, log_level="info", timeout_graceful_shutdown=3)
+    uvicorn.run(app, host=bind_host, port=args.port, log_level="info", timeout_graceful_shutdown=3)

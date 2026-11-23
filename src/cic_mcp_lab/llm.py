@@ -3,10 +3,10 @@ from agentscope.credential import DashScopeCredential
 from agentscope.model import DashScopeChatModel
 from openai import AsyncOpenAI
 
-from .config import Settings
+from .config import DashScopeSettings, Settings
 
 
-def make_chat_model(settings: Settings, model_name: str) -> DashScopeChatModel:
+def make_chat_model(settings: DashScopeSettings, model_name: str) -> DashScopeChatModel:
     """Non-streaming qwen chat model with thinking disabled (cheaper, faster)."""
     return DashScopeChatModel(
         credential=DashScopeCredential(

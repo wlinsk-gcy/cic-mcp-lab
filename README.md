@@ -26,6 +26,15 @@ Copy-Item .env.example .env   # 然后填写百炼与 OSS 配置
 | `uv run cic-intent-eval` | 意图识别评测：`data/intent_cases.yaml`（34 条，覆盖 5 种意图）→ 准确率、按意图准确率、错例、检索改写，报告写入 `reports/` |
 | `uv run pytest -q` | 运行单元测试 |
 
+## Provider 的 Docker Compose 部署
+
+在每台 Provider 机器的仓库根目录，将 `deploy/provider.env.example` 复制为 `.env.provider`。填写百炼地址、密钥、模型和本机的 Provider API Key，并将文件权限设为 `600`。
+
+- `192.168.218.99` 运行 `docker compose up -d --build --wait provider-a`。入口为 `http://192.168.218.99:8881/mcp`，提供 `trip_planner`、`product_copy` 和 Tasks 推送。
+- `192.168.218.91` 运行 `docker compose up -d --build --wait provider-b`。入口为 `http://192.168.218.91:8882/mcp`，提供 `weekly_report` 和 Tasks 轮询。
+
+容器健康检查用本机的 Bearer Key 请求 `tools/list`，核对工具名称。任务和 Agent 会话保存在进程内存中，容器重启后会丢失。直接运行 `provider-server` 时默认监听 `127.0.0.1`。
+
 ## Agent 上下架（实验）
 
 `data/agents.yaml` 中每个 Agent 的 `status` 为 `published` 或 `delisted`，修改它即模拟运营后台的上下架操作：

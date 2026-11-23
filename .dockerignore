@@ -1,0 +1,13 @@
+**
+!Dockerfile
+!pyproject.toml
+!uv.lock
+!README.md
+!src/
+!src/**
+!deploy/
+!deploy/check_provider.py
+**/.env
+**/.env.*
+**/__pycache__/
+**/*.pyc
